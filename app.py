@@ -7,87 +7,75 @@ st.set_page_config(page_title="Jarvis Sprint Planner", layout="wide")
 
 # Sidebar Configuration
 with st.sidebar:
-    st.header("Configuration")
+    st.header("1. Configuration")
     start_date = st.date_input("Start Date", datetime(2026, 1, 27))
-    num_sprints = st.number_input("How Many Sprints", min_value=1, value=2)
-    dev_count = st.number_input("Dev Team", value=3)
-    qa_count = st.number_input("QA Team", value=2)
+    dev_count = st.number_input("Dev Team Size", value=3)
+    qa_count = st.number_input("QA Team Size", value=2)
     capacity_per_res = st.number_input("Capacity per Resource (hrs)", value=64)
     leaves = st.number_input("Total Team Leave Days", value=0)
     
-    uploaded_file = st.file_uploader("Upload Excel/CSV Work Items", type=['xlsx', 'csv'])
+    st.header("2. Data Upload")
+    uploaded_file = st.file_uploader("Upload Excel/CSV", type=['xlsx', 'csv'])
 
 # Capacity Calculation
 dev_cap_limit = (dev_count * capacity_per_res) - (leaves * 8)
 qa_cap_limit = (qa_count * capacity_per_res)
 
-def initial_allocation(df, dev_limit, qa_limit):
-    sprint_assignments = []
-    current_dev, current_qa = 0, 0
-    
-    for _, row in df.iterrows():
-        d_hrs = row.get('Dev Hours', 0)
-        q_hrs = row.get('QA Hours', 0)
-        
-        if (current_dev + d_hrs <= dev_limit) and (current_qa + q_hrs <= qa_limit):
-            sprint_assignments.append("Sprint 1")
-            current_dev += d_hrs
-            current_qa += q_hrs
-        else:
-            sprint_assignments.append("Sprint 2")
-            
-    df['Assigned Sprint'] = sprint_assignments
-    return df
-
 if uploaded_file:
     # Load Data
-    raw_df = pd.read_excel(uploaded_file) if "xlsx" in uploaded_file.name else pd.read_csv(uploaded_file)
+    df = pd.read_excel(uploaded_file) if "xlsx" in uploaded_file.name else pd.read_csv(uploaded_file)
     
-    # Run Initial Logic
-    if 'Assigned Sprint' not in raw_df.columns:
-        allocated_df = initial_allocation(raw_df, dev_cap_limit, qa_cap_limit)
-    else:
-        allocated_df = raw_df
+    # 3. Column Mapping UI
+    st.header("3. Column Mapping")
+    col_cols = st.columns(2)
+    with col_cols[0]:
+        dev_col = st.selectbox("Select Dev Hours Column", options=df.columns, index=df.columns.get_loc("Hours") if "Hours" in df.columns else 0)
+    with col_cols[1]:
+        # If you don't have a QA column, we use the same or a default
+        qa_col = st.selectbox("Select QA Hours Column (Optional)", options=["None"] + list(df.columns))
 
-    st.header("Interactive Sprint Editor")
-    st.info("Jarvis: You can manually override the 'Assigned Sprint' column directly in the table below.")
-    
-    # Manual Override Table
+    # Data Preparation
+    df['Dev_Target'] = pd.to_numeric(df[dev_col], errors='coerce').fillna(0)
+    if qa_col != "None":
+        df['QA_Target'] = pd.to_numeric(df[qa_col], errors='coerce').fillna(0)
+    else:
+        df['QA_Target'] = 0 # Default to 0 if no QA column exists
+
+    # Initial Allocation Logic
+    if 'Assigned Sprint' not in df.columns:
+        sprints = []
+        c_dev, c_qa = 0, 0
+        for _, row in df.iterrows():
+            if (c_dev + row['Dev_Target'] <= dev_cap_limit):
+                sprints.append("Sprint 1")
+                c_dev += row['Dev_Target']
+            else:
+                sprints.append("Sprint 2")
+        df['Assigned Sprint'] = sprints
+
+    # Interactive Editor
+    st.header("4. Interactive Sprint Plan")
     edited_df = st.data_editor(
-        allocated_df,
+        df,
         column_config={
-            "Assigned Sprint": st.column_config.SelectboxColumn(
-                "Assigned Sprint",
-                options=["Sprint 1", "Sprint 2"],
-                required=True,
-            )
+            "Assigned Sprint": st.column_config.SelectboxColumn("Assigned Sprint", options=["Sprint 1", "Sprint 2"])
         },
-        use_container_width=True,
-        num_rows="dynamic"
+        use_container_width=True
     )
 
-    # Recalculate Metrics based on Edits
-    s1_data = edited_df[edited_df['Assigned Sprint'] == 'Sprint 1']
-    s2_data = edited_df[edited_df['Assigned Sprint'] == 'Sprint 2']
+    # Visualization
+    s1 = edited_df[edited_df['Assigned Sprint'] == 'Sprint 1']
+    s2 = edited_df[edited_df['Assigned Sprint'] == 'Sprint 2']
     
-    s1_dev, s1_qa = s1_data['Dev Hours'].sum(), s1_data['QA Hours'].sum()
-    s2_dev, s2_qa = s2_data['Dev Hours'].sum(), s2_data['QA Hours'].sum()
+    s1_d, s1_q = s1['Dev_Target'].sum(), s1['QA_Target'].sum()
+    s2_d, s2_q = s2['Dev_Target'].sum(), s2['QA_Target'].sum()
 
-    # Dashboard Metrics
-    st.header("Updated Utilization Summary")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("S1 Dev Load", f"{s1_dev} / {dev_cap_limit}h", delta=f"{s1_dev - dev_cap_limit}" if s1_dev > dev_cap_limit else None, delta_color="inverse")
-    c2.metric("S1 QA Load", f"{s1_qa} / {qa_cap_limit}h", delta=f"{s1_qa - qa_cap_limit}" if s1_qa > qa_cap_limit else None, delta_color="inverse")
-    c3.metric("S2 Dev Load", f"{s2_dev} / {dev_cap_limit}h", delta=f"{s2_dev - dev_cap_limit}" if s2_dev > dev_cap_limit else None, delta_color="inverse")
-    c4.metric("S2 QA Load", f"{s2_qa} / {qa_cap_limit}h", delta=f"{s2_qa - qa_cap_limit}" if s2_qa > qa_cap_limit else None, delta_color="inverse")
-
-    # Chart
+    st.header("5. Utilization Metrics")
     fig = go.Figure(data=[
-        go.Bar(name='Dev Utilization %', x=['Sprint 1', 'Sprint 2'], y=[(s1_dev/dev_cap_limit)*100, (s2_dev/dev_cap_limit)*100], marker_color='#1f77b4'),
-        go.Bar(name='QA Utilization %', x=['Sprint 1', 'Sprint 2'], y=[(s1_qa/qa_cap_limit)*100, (s2_qa/qa_limit)*100], marker_color='#ff7f0e')
+        go.Bar(name='Dev Utilization', x=['S1', 'S2'], y=[(s1_d/dev_cap_limit)*100, (s2_d/dev_cap_limit)*100]),
+        go.Bar(name='QA Utilization', x=['S1', 'S2'], y=[(s1_q/qa_cap_limit)*100, (s2_q/qa_cap_limit)*100])
     ])
-    fig.update_layout(barmode='group', yaxis_title="Percentage (%)", yaxis=dict(range=[0, 120]))
-    fig.add_hline(y=100, line_dash="dash", line_color="red", annotation_text="Limit")
+    fig.add_hline(y=100, line_dash="dash", line_color="red")
     st.plotly_chart(fig, use_container_width=True)
-    
-    st.download_button("Export Final Plan", edited_df.to_csv(index=False).encode('utf-8'), "final_sprint_plan.csv")
+
+    st.download_button("Download Plan", edited_df.to_csv(index=False).encode('utf-8'), "sprint_plan.csv")
