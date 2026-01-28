@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(page_title="Jarvis Resource Planner", layout="wide")
 
@@ -29,7 +29,6 @@ def get_resource_burndown(total_hours, days, resource_name):
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=day_list, y=ideal_line, name="Ideal Path", line=dict(color='gray', dash='dash')))
-    # Planned progression assuming linear completion for visualization
     fig.add_trace(go.Scatter(x=day_list, y=ideal_line, name="Planned Burn", line=dict(color='green', width=3)))
     
     fig.update_layout(
@@ -42,42 +41,56 @@ def get_resource_burndown(total_hours, days, resource_name):
     return fig
 
 def allocate_resources(df, n_sprints, d_count, q_count, limit):
-    df = df[~df['Task Description'].str.contains("Analysis|SRS", case=False, na=False)].copy()
-    df['Hours'] = pd.to_numeric(df['Hours'], errors='coerce').fillna(0)
+    # CLEANING: Strip whitespace from column names to fix KeyError
+    df.columns = df.columns.str.strip()
     
-    dev_tasks = df[~df['Task Description'].str.contains("QA|Testing|Test Case", case=False)].copy()
-    qa_tasks = df[df['Task Description'].str.contains("QA|Testing|Test Case", case=False)].copy()
+    # DYNAMIC COLUMN DETECTION
+    task_col = next((c for c in df.columns if "Task" in c), df.columns[1])
+    hour_col = next((c for c in df.columns if "Hours" in c or "Effort" in c), df.columns[-1])
+    
+    # Ensure Task Description is a string
+    df[task_col] = df[task_col].fillna("Unknown").astype(str)
+    df[hour_col] = pd.to_numeric(df[hour_col], errors='coerce').fillna(0)
+    
+    # Filter out Analysis phase
+    df = df[~df[task_col].str.contains("Analysis|SRS", case=False, na=False)].copy()
+    
+    dev_tasks = df[~df[task_col].str.contains("QA|Testing|Test Case", case=False)].copy()
+    qa_tasks = df[df[task_col].str.contains("QA|Testing|Test Case", case=False)].copy()
 
     plan = []
     res_clocks = {f"Sprint {s}": {**{f"Dev {i+1}": 0 for i in range(d_count)}, **{f"QA {i+1}": 0 for i in range(q_count)}} for s in range(1, n_sprints + 1)}
 
-    # Dev Allocation
+    # Dev Allocation (Balanced Weightage)
     for _, row in dev_tasks.iterrows():
         assigned = False
         for s in range(1, n_sprints + 1):
             s_name = f"Sprint {s}"
             devs = {k: v for k, v in res_clocks[s_name].items() if "Dev" in k}
             best_dev = min(devs, key=devs.get)
-            if res_clocks[s_name][best_dev] + row['Hours'] <= limit:
-                res_clocks[s_name][best_dev] += row['Hours']
-                plan.append({**row, "Sprint": s_name, "Resource": best_dev})
+            if res_clocks[s_name][best_dev] + row[hour_col] <= limit:
+                res_clocks[s_name][best_dev] += row[hour_col]
+                plan.append({"Task": row[task_col], "Hours": row[hour_col], "Sprint": s_name, "Resource": best_dev})
                 assigned = True
                 break
-        if not assigned: plan.append({**row, "Sprint": "Backlog", "Resource": "None"})
+        if not assigned: plan.append({"Task": row[task_col], "Hours": row[hour_col], "Sprint": "Backlog", "Resource": "None"})
 
     # Staggered QA Allocation
     for _, row in qa_tasks.iterrows():
-        is_tc = "Case" in row['Task Description'] or "Preparation" in row['Task Description']
+        is_tc = "Case" in row[task_col] or "Preparation" in row[task_col]
         for s in range(1, n_sprints + 1):
             s_num = s if is_tc else s + 1
             s_name = f"Sprint {s_num}"
             if s_name not in res_clocks: continue
             qas = {k: v for k, v in res_clocks[s_name].items() if "QA" in k}
             best_qa = min(qas, key=qas.get)
+            
+            # Sprint 1 QA Rule (80% capacity for TC writing)
             current_limit = limit * 0.8 if (is_tc and s == 1) else limit
-            if res_clocks[s_name][best_qa] + row['Hours'] <= current_limit:
-                res_clocks[s_name][best_qa] += row['Hours']
-                plan.append({**row, "Sprint": s_name, "Resource": best_qa})
+            
+            if res_clocks[s_name][best_qa] + row[hour_col] <= current_limit:
+                res_clocks[s_name][best_qa] += row[hour_col]
+                plan.append({"Task": row[task_col], "Hours": row[hour_col], "Sprint": s_name, "Resource": best_qa})
                 break
                 
     return pd.DataFrame(plan), res_clocks
@@ -94,7 +107,7 @@ if uploaded_file:
     for res in c_df['Resource'].unique():
         mask = c_df['Resource'] == res
         fig_main.add_trace(go.Bar(x=c_df[mask]['Sprint'], y=c_df[mask]['Hours'], name=res))
-    fig_main.add_hline(y=hrs_per_person, line_dash="dash", line_color="red")
+    fig_main.add_hline(y=hrs_per_person, line_dash="dash", line_color="red", annotation_text="Limit")
     st.plotly_chart(fig_main, use_container_width=True)
 
     
@@ -117,8 +130,8 @@ if uploaded_file:
                 
                 with st.expander("View Task List"):
                     for _, t in res_tasks.iterrows():
-                        st.write(f"- {t['Task Description']} ({t['Hours']}h)")
+                        st.write(f"- {t['Task']} ({t['Hours']}h)")
 
     st.download_button("Export Jarvis Plan", final_plan.to_csv(index=False).encode('utf-8'), "jarvis_resource_plan.csv")
 else:
-    st.info("Jarvis: Awaiting data upload to generate personal burndown charts.")
+    st.info("Jarvis: Awaiting data upload. Ensure your file has 'Task Description' and 'Hours' columns.")
