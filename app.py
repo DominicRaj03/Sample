@@ -24,33 +24,34 @@ dev_cap_limit = (dev_count * capacity_per_res) - leaves
 qa_cap_limit = (qa_count * capacity_per_res)
 
 def balanced_allocation(df, n_sprints, d_limit, q_limit, effort_col, task_col):
-    # Filter out Analysis phase as requested
+    # FIX: Ensure column is string to prevent AttributeError
+    df[task_col] = df[task_col].fillna("Unknown").astype(str)
+    
+    # Filter out Analysis phase
     df = df[~df[task_col].str.contains("Analysis|SRS|Mock-up", case=False, na=False)].copy()
     
-    # Identify QA vs Dev tasks (Heuristic: keywords in task/description)
-    df['Type'] = df[task_col].apply(lambda x: 'QA' if any(word in str(x).upper() for word in ['QA', 'TESTING', 'UAT', 'BUG']) else 'Dev')
+    # Identify QA vs Dev tasks
+    df['Type'] = df[task_col].apply(lambda x: 'QA' if any(word in x.upper() for word in ['QA', 'TESTING', 'UAT', 'BUG']) else 'Dev')
     df['Effort'] = pd.to_numeric(df[effort_col], errors='coerce').fillna(0)
     
-    # Sort tasks by effort (Descending) for better balancing
+    # Sort tasks by effort (Descending) for balanced distribution
     df = df.sort_values(by='Effort', ascending=False)
     
     # Initialize Sprint Loads
-    sprint_data = {f"Sprint {i+1}": {"Dev": 0, "QA": 0, "Tasks": []} for i in range(n_sprints)}
-    assignments = []
+    sprint_data = {f"Sprint {i+1}": {"Dev": 0, "QA": 0} for i in range(n_sprints)}
+    df['Assigned Sprint'] = "Unassigned"
 
     for idx, row in df.iterrows():
         task_type = row['Type']
         effort = row['Effort']
+        limit = d_limit if task_type == 'Dev' else q_limit
         
-        # Find the sprint with the LOWEST current load for that specific resource type
-        # that still has capacity
+        # Greedily assign to the sprint with the lowest current load
         best_sprint = None
         min_load = float('inf')
         
-        for s_name, load in sprint_data.items():
-            current_load = load[task_type]
-            limit = d_limit if task_type == 'Dev' else q_limit
-            
+        for s_name in sprint_data:
+            current_load = sprint_data[s_name][task_type]
             if current_load + effort <= limit:
                 if current_load < min_load:
                     min_load = current_load
@@ -60,61 +61,56 @@ def balanced_allocation(df, n_sprints, d_limit, q_limit, effort_col, task_col):
             sprint_data[best_sprint][task_type] += effort
             df.at[idx, 'Assigned Sprint'] = best_sprint
         else:
-            df.at[idx, 'Assigned Sprint'] = "Unassigned (Over Capacity)"
+            df.at[idx, 'Assigned Sprint'] = "Backlog (Over Capacity)"
 
-    return df
+    return df.sort_index()
 
 if uploaded_file:
-    # Load and clean
     df_raw = pd.read_excel(uploaded_file) if "xlsx" in uploaded_file.name else pd.read_csv(uploaded_file)
     df_raw.columns = df_raw.columns.str.strip()
     
-    # Auto-detect columns from your MPESA file
+    # Auto-detect columns from your specific file
     task_col = "Task Description" if "Task Description" in df_raw.columns else df_raw.columns[0]
     effort_col = "Hours" if "Hours" in df_raw.columns else df_raw.columns[-1]
 
-    # Run Balanced Logic
     processed_df = balanced_allocation(df_raw, num_sprints, dev_cap_limit, qa_cap_limit, effort_col, task_col)
 
-    # 1. Dashboard Metrics
+    # Dashboard Metrics
     st.header("Balanced Sprint Summary")
     cols = st.columns(num_sprints)
-    for i, sprint_name in enumerate(processed_df['Assigned Sprint'].unique()):
-        if "Unassigned" in sprint_name: continue
-        with cols[i % num_sprints]:
-            s_data = processed_df[processed_df['Assigned Sprint'] == sprint_name]
+    for i in range(num_sprints):
+        s_name = f"Sprint {i+1}"
+        with cols[i]:
+            s_data = processed_df[processed_df['Assigned Sprint'] == s_name]
             d_load = s_data[s_data['Type'] == 'Dev']['Effort'].sum()
             q_load = s_data[s_data['Type'] == 'QA']['Effort'].sum()
-            st.metric(f"{sprint_name} Load", f"{int(d_load + q_load)} hrs")
+            st.metric(s_name, f"{int(d_load + q_load)} hrs")
             st.caption(f"Dev: {int(d_load)}/{dev_cap_limit}h | QA: {int(q_load)}/{qa_cap_limit}h")
 
-    # 2. Visual Balance Chart
+    # Visual Weightage Chart
+    
     st.subheader("Workload Weightage Comparison")
     chart_data = []
-    for s in [f"Sprint {i+1}" for i in range(num_sprints)]:
+    for i in range(num_sprints):
+        s = f"Sprint {i+1}"
         s_data = processed_df[processed_df['Assigned Sprint'] == s]
         chart_data.append({"Sprint": s, "Role": "Dev", "Hours": s_data[s_data['Type'] == 'Dev']['Effort'].sum()})
         chart_data.append({"Sprint": s, "Role": "QA", "Hours": s_data[s_data['Type'] == 'QA']['Effort'].sum()})
     
-    chart_df = pd.DataFrame(chart_data)
     fig = go.Figure()
     for role in ["Dev", "QA"]:
-        role_df = chart_df[chart_df['Role'] == role]
-        fig.add_trace(go.Bar(x=role_df['Sprint'], y=role_df['Hours'], name=role))
+        subset = [d for d in chart_data if d['Role'] == role]
+        fig.add_trace(go.Bar(x=[d['Sprint'] for d in subset], y=[d['Hours'] for d in subset], name=role))
     
-    fig.update_layout(barmode='stack', title="Hours Allocated per Sprint (Balanced)")
+    fig.update_layout(barmode='stack', title="Hours Allocated (Balanced Logic)")
     st.plotly_chart(fig, use_container_width=True)
 
-    # 3. Interactive Schedule
-    st.subheader("Detailed Work Schedule (Drag/Edit to adjust)")
-    final_df = st.data_editor(
+    # Detailed Table
+    st.subheader("Final Plan")
+    st.data_editor(
         processed_df[[task_col, 'Type', 'Effort', 'Assigned Sprint']],
-        column_config={
-            "Assigned Sprint": st.column_config.SelectboxColumn("Sprint", options=[f"Sprint {i+1}" for i in range(num_sprints)] + ["Backlog"]),
-            "Effort": st.column_config.NumberColumn("Hours")
-        },
         use_container_width=True,
         hide_index=True
     )
     
-    st.download_button("Export Balanced Plan", final_df.to_csv(index=False).encode('utf-8'), "balanced_sprint_plan.csv")
+    st.download_button("Export Balanced Plan", processed_df.to_csv(index=False).encode('utf-8'), "balanced_sprint_plan.csv")
