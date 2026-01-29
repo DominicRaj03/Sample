@@ -7,23 +7,36 @@ import io
 # Config
 st.set_page_config(page_title="Jarvis - Sprint planning", layout="wide")
 
-# --- 1. Persistent Data Management ---
+# --- 1. Persistent State Initialization ---
+# This block ensures that every UI component is backed by session_state
 if 'master_plan' not in st.session_state:
     st.session_state.master_plan = None
 if 'release_quality' not in st.session_state:
     st.session_state.release_quality = pd.DataFrame()
 if 'team_setup' not in st.session_state:
-    st.session_state.team_setup = {"devs": [], "qas": [], "leads": [], "role_caps": {"Dev": 8, "QA": 8, "Lead": 8}}
+    st.session_state.team_setup = {
+        'devs': ["Solaimalai", "Ananth", "Surya"], # Default values from your setup
+        'qas': ["Noah"], 
+        'leads': ["Narmadha"], 
+        'num_sp': 4, 
+        'sp_days': 10, 
+        'start_dt': datetime(2026, 2, 9),
+        'buffer': 10,
+        'role_caps': {'Dev': 8, 'QA': 8, 'Lead': 8}
+    }
 if 'planning_inputs' not in st.session_state:
-    st.session_state.planning_inputs = {}
+    # Initialize all lifecycle fields to zero to prevent erase on navigation
+    st.session_state.planning_inputs = {
+        "Analysis Phase": 0.0, "Development Phase": 0.0, "Bug Fixes": 0.0,
+        "Code Review": 0.0, "QA testing": 0.0, "TC preparation": 0.0,
+        "Bug retest": 0.0, "Integration Testing": 0.0, "Smoke test": 0.0,
+        "Merge and Deploy": 0.0
+    }
 
 # --- 2. Logic Engine ---
 def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, sprint_days, buffer_pct):
     plan = []
     curr_dt = pd.to_datetime(start_date)
-    # Apply Sprint Buffer to available hours
-    efficiency_factor = (100 - buffer_pct) / 100
-    
     for i in range(num_sprints):
         s_start = curr_dt + timedelta(days=i * sprint_days)
         s_end = s_start + timedelta(days=sprint_days - 1)
@@ -59,23 +72,24 @@ page = st.sidebar.radio("Go to:", ["Master Setup", "Roadmap Editor", "Resource S
 st.sidebar.divider()
 st.sidebar.subheader("🔄 Central Control")
 
+# SYNC & LOAD: Propagates current state to all pages
 if st.sidebar.button("🔃 Sync & Load Data", use_container_width=True, type="primary"):
-    if st.session_state.team_setup.get('devs'):
-        st.session_state.master_plan = run_allocation(
-            st.session_state.team_setup['devs'], st.session_state.team_setup['qas'],
-            st.session_state.team_setup['leads'], st.session_state.planning_inputs,
-            st.session_state.team_setup['num_sp'], st.session_state.team_setup['start_dt'],
-            st.session_state.team_setup['sp_days'], st.session_state.team_setup.get('buffer', 0)
-        )
-        st.session_state.release_quality = pd.DataFrame([
-            {"Sprint": f"Sprint {i}", "TCs Created": 0, "TCs Executed": 0, "Bugs Found": 0} 
-            for i in range(st.session_state.team_setup['num_sp'])
-        ])
-        st.sidebar.success("Environment Synced!")
+    st.session_state.master_plan = run_allocation(
+        st.session_state.team_setup['devs'], st.session_state.team_setup['qas'],
+        st.session_state.team_setup['leads'], st.session_state.planning_inputs,
+        st.session_state.team_setup['num_sp'], st.session_state.team_setup['start_dt'],
+        st.session_state.team_setup['sp_days'], st.session_state.team_setup['buffer']
+    )
+    st.session_state.release_quality = pd.DataFrame([
+        {"Sprint": f"Sprint {i}", "TCs Created": 0, "TCs Executed": 0, "Bugs Found": 0} 
+        for i in range(st.session_state.team_setup['num_sp'])
+    ])
+    st.sidebar.success("Global State Synced!")
 
+# RESET ALL: Clears the state manually
 if st.sidebar.button("🗑️ Reset All Data", use_container_width=True):
-    st.session_state.master_plan = None
-    st.session_state.release_quality = pd.DataFrame()
+    for key in ['master_plan', 'release_quality', 'team_setup', 'planning_inputs']:
+        st.session_state.pop(key, None)
     st.rerun()
 
 # --- PAGE: MASTER SETUP ---
@@ -85,74 +99,68 @@ if page == "Master Setup":
     with st.expander("🛡️ Role-Based Capacity & Buffer", expanded=True):
         bc1, bc2 = st.columns(2)
         with bc1:
-            st.session_state.team_setup['buffer'] = st.slider("Sprint Buffer (%)", 0, 50, 10, help="Reserve % of capacity for unplanned tasks")
+            st.session_state.team_setup['buffer'] = st.slider("Sprint Buffer (%)", 0, 50, st.session_state.team_setup.get('buffer', 10))
         with bc2:
-            st.write("**Daily Max Hours by Role**")
             rc1, rc2, rc3 = st.columns(3)
-            st.session_state.team_setup['role_caps']['Dev'] = rc1.number_input("Dev", 1, 24, 8)
-            st.session_state.team_setup['role_caps']['QA'] = rc2.number_input("QA", 1, 24, 8)
-            st.session_state.team_setup['role_caps']['Lead'] = rc3.number_input("Lead", 1, 24, 8)
+            st.session_state.team_setup['role_caps']['Dev'] = rc1.number_input("Dev Cap", 1, 24, st.session_state.team_setup['role_caps']['Dev'])
+            st.session_state.team_setup['role_caps']['QA'] = rc2.number_input("QA Cap", 1, 24, st.session_state.team_setup['role_caps']['QA'])
+            st.session_state.team_setup['role_caps']['Lead'] = rc3.number_input("Lead Cap", 1, 24, st.session_state.team_setup['role_caps']['Lead'])
 
     with st.expander("👥 Team Definition", expanded=False):
         col1, col2, col3 = st.columns(3)
+        # Using session_state for text inputs ensures values persist on navigation
         with col1:
-            d_sz = st.number_input("Dev Team Size", 1, 10, 3)
-            st.session_state.team_setup['devs'] = [st.text_input(f"Dev {j+1}", f"Dev_{j+1}", key=f"d{j}") for j in range(d_sz)]
+            d_sz = st.number_input("Dev Team Size", 1, 10, len(st.session_state.team_setup['devs']))
+            st.session_state.team_setup['devs'] = [st.text_input(f"Dev {j+1}", st.session_state.team_setup['devs'][j] if j < len(st.session_state.team_setup['devs']) else f"Dev_{j+1}", key=f"d{j}") for j in range(d_sz)]
         with col2:
-            q_sz = st.number_input("QA Team Size", 1, 5, 1)
-            st.session_state.team_setup['qas'] = [st.text_input(f"QA {j+1}", f"QA_{j+1}", key=f"q{j}") for j in range(q_sz)]
+            q_sz = st.number_input("QA Team Size", 1, 5, len(st.session_state.team_setup['qas']))
+            st.session_state.team_setup['qas'] = [st.text_input(f"QA {j+1}", st.session_state.team_setup['qas'][j] if j < len(st.session_state.team_setup['qas']) else f"QA_{j+1}", key=f"q{j}") for j in range(q_sz)]
         with col3:
-            l_sz = st.number_input("Lead Team Size", 1, 5, 1)
-            st.session_state.team_setup['leads'] = [st.text_input(f"Lead {j+1}", f"Lead_{j+1}", key=f"l{j}") for j in range(l_sz)]
+            l_sz = st.number_input("Lead Team Size", 1, 5, len(st.session_state.team_setup['leads']))
+            st.session_state.team_setup['leads'] = [st.text_input(f"Lead {j+1}", st.session_state.team_setup['leads'][j] if j < len(st.session_state.team_setup['leads']) else f"Lead_{j+1}", key=f"l{j}") for j in range(l_sz)]
 
     with st.expander("📅 Sprint Schedule & Effort", expanded=True):
         c1, c2, c3 = st.columns(3)
-        st.session_state.team_setup['start_dt'] = c1.date_input("Project Start", datetime(2026, 2, 9))
-        st.session_state.team_setup['num_sp'] = c2.number_input("Total Sprints", 2, 24, 4)
-        st.session_state.team_setup['sp_days'] = c3.number_input("Working Days/Sprint", 1, 60, 10)
+        st.session_state.team_setup['start_dt'] = c1.date_input("Project Start", st.session_state.team_setup['start_dt'])
+        st.session_state.team_setup['num_sp'] = c2.number_input("Total Sprints", 2, 24, st.session_state.team_setup['num_sp'])
+        st.session_state.team_setup['sp_days'] = c3.number_input("Working Days/Sprint", 1, 60, st.session_state.team_setup['sp_days'])
 
         st.subheader("Planning Inputs")
         pc1, pc2 = st.columns(2)
+        # Lifecycle fields mapped to persistent session state
         with pc1:
-            h_ap = st.number_input("Analysis Phase", 0.0); h_dp = st.number_input("Development Phase", 0.0)
-            h_bf = st.number_input("Bug Fixes", 0.0); h_cr = st.number_input("Code Review", 0.0); h_qt = st.number_input("QA testing", 0.0)
+            for field in ["Analysis Phase", "Development Phase", "Bug Fixes", "Code Review", "QA testing"]:
+                st.session_state.planning_inputs[field] = st.number_input(field, value=st.session_state.planning_inputs.get(field, 0.0))
         with pc2:
-            h_tc = st.number_input("TC preparation", 0.0); h_br = st.number_input("Bug retest", 0.0)
-            h_it = st.number_input("Integration Testing", 0.0); h_st = st.number_input("Smoke test", 0.0); h_md = st.number_input("Merge and Deploy", 0.0)
-        st.session_state.planning_inputs = {"Analysis Phase": h_ap, "Development Phase": h_dp, "Bug Fixes": h_bf, "Code Review": h_cr, "QA testing": h_qt, "TC preparation": h_tc, "Bug retest": h_br, "Integration Testing": h_it, "Smoke test": h_st, "Merge and Deploy": h_md}
+            for field in ["TC preparation", "Bug retest", "Integration Testing", "Smoke test", "Merge and Deploy"]:
+                st.session_state.planning_inputs[field] = st.number_input(field, value=st.session_state.planning_inputs.get(field, 0.0))
 
 # --- PAGE: ROADMAP EDITOR ---
 elif page == "Roadmap Editor":
     st.title("🗺️ Roadmap Editor")
     if st.session_state.master_plan is not None:
-        # Validation Warnings Logic
+        # Validation logic remains active during manual edits
         sp_days = st.session_state.team_setup['sp_days']
-        buffer_pct = st.session_state.team_setup.get('buffer', 0)
-        
+        buffer_pct = st.session_state.team_setup['buffer']
         usage = st.session_state.master_plan.groupby(['Sprint', 'Owner', 'Role'])['Hours'].sum().reset_index()
         
-        for index, row in usage.iterrows():
+        for _, row in usage.iterrows():
             role_limit = st.session_state.team_setup['role_caps'].get(row['Role'], 8)
-            net_capacity = (role_limit * sp_days) * ((100 - buffer_pct) / 100)
-            
-            if row['Hours'] > net_capacity:
-                st.error(f"⚠️ **Validation Warning:** {row['Owner']} ({row['Role']}) has {row['Hours']}h in {row['Sprint']}. Max available after {buffer_pct}% buffer is {net_capacity}h.")
+            net_cap = (role_limit * sp_days) * ((100 - buffer_pct) / 100)
+            if row['Hours'] > net_cap:
+                st.error(f"⚠️ Capacity Breach: {row['Owner']} ({row['Hours']}h > {net_cap}h limit)")
         
         st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
     else:
-        st.info("Sync data in sidebar to start.")
+        st.info("Sync Data in Sidebar to load the Roadmap.")
 
 # --- PAGE: RESOURCE SPLIT-UP ---
 elif page == "Resource Split-up":
-    st.title("📊 Resource Balancing & Intelligence")
+    st.title("📊 Resource Intelligence")
     if st.session_state.master_plan is not None:
-        # Resource Balancing View
-        st.subheader("Team Resource Balancing (Load vs Capacity)")
         balance_df = st.session_state.master_plan.groupby(['Owner', 'Role', 'Sprint'])['Hours'].sum().reset_index()
-        fig_bal = px.bar(balance_df, x='Owner', y='Hours', color='Sprint', barmode='group', title="Resource Load Balancing")
-        st.plotly_chart(fig_bal, use_container_width=True)
+        st.plotly_chart(px.bar(balance_df, x='Owner', y='Hours', color='Sprint', barmode='group', title="Team Load Balancing"), use_container_width=True)
         
-        st.divider()
         owners = st.session_state.master_plan["Owner"].unique()
         sel = st.selectbox("Detailed Resource View", owners)
         res_data = st.session_state.master_plan[st.session_state.master_plan["Owner"] == sel]
@@ -165,5 +173,4 @@ elif page == "Quality Metrics":
     st.title("🛡️ Quality Intelligence")
     if not st.session_state.release_quality.empty:
         st.session_state.release_quality = st.data_editor(st.session_state.release_quality, use_container_width=True)
-        q = st.session_state.release_quality
-        st.plotly_chart(px.line(q, x="Sprint", y="Bugs Found", title="Defect Discovery Trend", markers=True))
+        st.plotly_chart(px.line(st.session_state.release_quality, x="Sprint", y="Bugs Found", markers=True, title="Defect Trend"))
