@@ -4,30 +4,32 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import io
 
-st.set_page_config(page_title="Jarvis Executive Intelligence", layout="wide")
+# Config
+st.set_page_config(page_title="Jarvis - Sprint planning", layout="wide")
 
-# --- 1. Memory Initialization ---
+# --- 1. Persistent Memory ---
 if 'master_plan' not in st.session_state:
     st.session_state.master_plan = None
+if 'release_quality' not in st.session_state:
+    st.session_state.release_quality = pd.DataFrame()
+if 'team_setup' not in st.session_state:
+    st.session_state.team_setup = {"devs": [], "qas": [], "leads": [], "capacity": 0}
 
 # --- 2. Logic Engine ---
 def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, sprint_days):
     plan = []
     curr_dt = pd.to_datetime(start_date)
-    
     for i in range(num_sprints):
         s_start = curr_dt + timedelta(days=i * sprint_days)
         s_end = s_start + timedelta(days=sprint_days - 1)
         s_label = f"Sprint {i}"
 
         def assign(task, role, names, total_hrs):
-            if total_hrs <= 0: return
+            if total_hrs <= 0 or not names: return
             split = float(total_hrs) / len(names)
             for name in names:
-                plan.append({
-                    "Sprint": s_label, "Start": s_start, "Finish": s_end, 
-                    "Task": task, "Owner": name, "Role": role, "Hours": round(split, 1)
-                })
+                plan.append({"Sprint": s_label, "Start": s_start, "Finish": s_end, 
+                             "Task": task, "Owner": name, "Role": role, "Hours": round(split, 1)})
 
         if i == 0:
             assign("Analysis Phase", "Lead", leads, planning_data["Analysis"])
@@ -43,101 +45,99 @@ def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, spr
             assign("Integration Testing", "QA", qas, planning_data["Integ"])
             assign("Smoke test", "QA", qas, planning_data["Smoke"])
             assign("Merge and Deploy", "Ops", ["DevOps"], planning_data["Deploy"])
-            
     return pd.DataFrame(plan)
 
-# --- 3. UI: Team Setup ---
-st.title("Jarvis Phase-Gate Intelligence")
+# --- 3. Sidebar Navigation ---
+st.sidebar.title("💠 Jarvis Navigation")
+page = st.sidebar.radio("Go to:", ["Master Setup", "Roadmap Editor", "Resource Split-up", "Quality Metrics"])
 
-with st.expander("👥 Total Team Size & Capacity Settings", expanded=st.session_state.master_plan is None):
-    col_t1, col_t2, col_t3 = st.columns(3)
-    with col_t1:
-        d_size = st.number_input("Dev Team Size", 1, 10, 3)
-        dev_list = [st.text_input(f"Dev {j+1}", f"Dev_{j+1}", key=f"d{j}") for j in range(d_size)]
-    with col_t2:
-        q_size = st.number_input("QA Team Size", 1, 5, 1)
-        qa_list = [st.text_input(f"QA {j+1}", f"QA_{j+1}", key=f"q{j}") for j in range(q_size)]
-    with col_t3:
-        l_size = st.number_input("Lead Team Size", 1, 5, 1)
-        lead_list = [st.text_input(f"Lead {j+1}", f"Lead_{j+1}", key=f"l{j}") for j in range(l_size)]
+# --- PAGE: MASTER SETUP ---
+if page == "Master Setup":
+    st.title("⚙️ Project & Team Configuration")
     
-    st.divider()
-    sc1, sc2, sc3 = st.columns(3)
-    start_dt = sc1.date_input("Project Start", datetime(2026, 2, 9))
-    num_sp = sc2.number_input("Total Sprints", 2, 24, 4)
-    sp_days = sc3.number_input("Working Days/Sprint", 1, 60, 8)
-    daily_limit = st.slider("Max Daily Hours/Person", 1, 24, 8)
-    capacity = sp_days * daily_limit
+    with st.expander("👥 Team Definition", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            d_sz = st.number_input("Devs", 1, 10, 3)
+            devs = [st.text_input(f"D{j+1}", f"Dev_{j+1}", key=f"d{j}") for j in range(d_sz)]
+        with col2:
+            q_sz = st.number_input("QAs", 1, 5, 1)
+            qas = [st.text_input(f"Q{j+1}", f"QA_{j+1}", key=f"q{j}") for j in range(q_sz)]
+        with col3:
+            l_sz = st.number_input("Leads", 1, 5, 1)
+            leads = [st.text_input(f"L{j+1}", f"Lead_{j+1}", key=f"l{j}") for j in range(l_sz)]
 
-# --- 4. Sprint Planning (Unrestricted) ---
-with st.expander("📝 Sprint Planning (Effort Inputs)", expanded=True):
-    pc1, pc2 = st.columns(2)
-    with pc1:
-        h_analysis = st.number_input("Analysis Phase", value=0.0)
-        h_dev = st.number_input("Development Phase", value=0.0)
-        h_fixes = st.number_input("Bug Fixes", value=0.0)
-        h_review = st.number_input("Code Review", value=0.0)
-        h_qa = st.number_input("QA testing", value=0.0)
-    with pc2:
-        h_tc = st.number_input("TC preparation", value=0.0)
-        h_retest = st.number_input("Bug retest", value=0.0)
-        h_integ = st.number_input("Integration Testing", value=0.0)
-        h_smoke = st.number_input("Smoke test", value=0.0)
-        h_deploy = st.number_input("Merge and Deploy", value=0.0)
-    
-    plan_inputs = {
-        "Analysis": h_analysis, "Dev": h_dev, "Fixes": h_fixes, "Review": h_review,
-        "QA_Test": h_qa, "TC_Prep": h_tc, "Retest": h_retest, "Integ": h_integ,
-        "Smoke": h_smoke, "Deploy": h_deploy
-    }
+    with st.expander("📅 Sprint Schedule & Effort", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        start_dt = c1.date_input("Start", datetime(2026, 2, 9))
+        num_sp = c2.number_input("Sprints", 2, 24, 4)
+        sp_days = c3.number_input("Days/Sprint", 1, 60, 10)
+        daily_h = st.slider("Daily Limit", 1, 24, 8)
+        st.session_state.team_setup['capacity'] = sp_days * daily_h
 
-    if st.button("🚀 GENERATE ROADMAP", use_container_width=True):
-        st.session_state.master_plan = run_allocation(dev_list, qa_list, lead_list, plan_inputs, num_sp, start_dt, sp_days)
-        st.rerun()
+        st.subheader("Planning Inputs")
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            h_a = st.number_input("Analysis", 0.0); h_d = st.number_input("Dev", 0.0); h_f = st.number_input("Bug Fixes", 0.0)
+            h_r = st.number_input("Review", 0.0); h_q = st.number_input("QA Test", 0.0)
+        with pc2:
+            h_t = st.number_input("TC Prep", 0.0); h_re = st.number_input("Retest", 0.0); h_i = st.number_input("Integ", 0.0)
+            h_s = st.number_input("Smoke", 0.0); h_de = st.number_input("Deploy", 0.0)
 
-# --- 5. Tabs ---
-tab1, tab2 = st.tabs(["🗺️ Roadmap Editor", "📊 Analytics & Comparison"])
+    if st.button("🚀 GENERATE ALL PAGES", use_container_width=True):
+        inputs = {"Analysis": h_a, "Dev": h_d, "Fixes": h_f, "Review": h_r, "QA_Test": h_q, 
+                  "TC_Prep": h_t, "Retest": h_re, "Integ": h_i, "Smoke": h_s, "Deploy": h_de}
+        st.session_state.master_plan = run_allocation(devs, qas, leads, inputs, num_sp, start_dt, sp_days)
+        st.session_state.release_quality = pd.DataFrame([{"Sprint": f"Sprint {i}", "TCs Created": 0, "TCs Executed": 0, "Bugs Found": 0} for i in range(num_sp)])
+        st.success("Data Propagated to all pages.")
 
-with tab1:
+# --- PAGE: ROADMAP EDITOR ---
+elif page == "Roadmap Editor":
+    st.title("🗺️ Roadmap Editor")
     if st.session_state.master_plan is not None:
-        # Validation Warnings
+        cap = st.session_state.team_setup['capacity']
         usage = st.session_state.master_plan.groupby(['Sprint', 'Owner'])['Hours'].sum().reset_index()
-        over = usage[usage['Hours'] > capacity]
-        
+        over = usage[usage['Hours'] > cap]
         if not over.empty:
-            for _, row in over.iterrows():
-                st.error(f"⚠️ Capacity Breach: {row['Owner']} assigned {row['Hours']}h in {row['Sprint']} (Limit: {capacity}h)")
-        else:
-            st.success(f"✅ Capacity Check: All resources are within the {capacity}h limit.")
-            
-        st.write("### 🛠️ Manual Roadmap Editor")
+            for _, r in over.iterrows(): st.error(f"⚠️ {r['Owner']} overload in {r['Sprint']} ({r['Hours']}h > {cap}h)")
+        
         st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
+    else:
+        st.info("Configure 'Master Setup' first.")
 
-with tab2:
+# --- PAGE: RESOURCE SPLIT-UP ---
+elif page == "Resource Split-up":
+    st.title("📊 Resource Wise Sprint Split-up")
     if st.session_state.master_plan is not None:
-        # Resource Filter
-        all_owners = sorted(st.session_state.master_plan["Owner"].unique().tolist())
-        sel_res = st.multiselect("🔍 Filter Resources", options=all_owners, default=all_owners)
+        owners = st.session_state.master_plan["Owner"].unique()
+        selected = st.selectbox("Select Resource to Inspect", owners)
         
-        # Comparison Matrix
-        st.subheader("Sprint Workload Comparison")
-        comp = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
-        st.dataframe(comp.style.background_gradient(cmap="YlOrRd"), use_container_width=True)
+        res_data = st.session_state.master_plan[st.session_state.master_plan["Owner"] == selected]
         
-        # Gantt Timeline
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.write(f"**Workload for {selected}**")
+            st.dataframe(res_data[["Sprint", "Task", "Hours"]], hide_index=True)
+        with c2:
+            fig = px.pie(res_data, values='Hours', names='Task', title=f"Task Distribution: {selected}")
+            st.plotly_chart(fig)
+        
         st.divider()
-        st.subheader("Day-to-Day Timeline")
-        df_viz = st.session_state.master_plan[st.session_state.master_plan["Owner"].isin(sel_res)].copy()
-        df_viz["Start"] = pd.to_datetime(df_viz["Start"])
-        df_viz["Finish"] = pd.to_datetime(df_viz["Finish"])
-        
-        fig = px.timeline(df_viz, x_start="Start", x_end="Finish", y="Task", color="Owner")
-        fig.update_yaxes(autorange="reversed")
-        st.plotly_chart(fig, use_container_width=True)
+        st.subheader("Global Resource Comparison")
+        comp = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
+        st.dataframe(comp.style.background_gradient(cmap="YlGnBu"), use_container_width=True)
 
-        # Export
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            st.session_state.master_plan.to_excel(writer, sheet_name='Roadmap', index=False)
-            comp.to_excel(writer, sheet_name='Workload_Comparison')
-        st.download_button("📥 Export to Excel", buffer.getvalue(), "Jarvis_Roadmap.xlsx", use_container_width=True)
+# --- PAGE: QUALITY METRICS ---
+elif page == "Quality Metrics":
+    st.title("🛡️ Release Quality Metrics")
+    if not st.session_state.release_quality.empty:
+        st.session_state.release_quality = st.data_editor(st.session_state.release_quality, use_container_width=True)
+        
+        q = st.session_state.release_quality
+        q["Execution %"] = (q["TCs Executed"] / q["TCs Created"].replace(0, 1) * 100).round(1)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.plotly_chart(px.line(q, x="Sprint", y="Bugs Found", markers=True, title="Defect Trend"))
+        with col2:
+            st.plotly_chart(px.bar(q, x="Sprint", y="Execution %", color="Execution %", title="Testing Coverage"))
