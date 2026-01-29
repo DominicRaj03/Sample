@@ -5,14 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import io
 
-# Dependency check for Excel
-try:
-    import xlsxwriter
-    EXCEL_SUPPORT = True
-except ImportError:
-    EXCEL_SUPPORT = False
-
-st.set_page_config(page_title="Jarvis Resource Architect", layout="wide")
+st.set_page_config(page_title="Jarvis Executive Architect", layout="wide")
 
 # --- 1. Persistent Memory ---
 if 'master_plan' not in st.session_state:
@@ -33,101 +26,96 @@ def run_sequential_allocation(dev_names, qa_names, lead_names, data, base_cap, n
     for i in range(num_sprints):
         s_start = start_date + timedelta(days=i * sprint_days)
         s_end = s_start + timedelta(days=sprint_days - 1)
-        sprint_caps[f"Sprint {i}"] = max((base_cap) * (1 - (buffer_pct / 100)), 0.1)
+        cap = max((base_cap) * (1 - (buffer_pct / 100)), 0.1)
+        sprint_caps[f"Sprint {i}"] = cap
 
         def assign(sprint, names, task, role, hrs):
             owner = min(names, key=lambda x: resource_load[sprint][x])
             resource_load[sprint][owner] += hrs
             return {
-                "Sprint": sprint, 
-                "Start_Date": s_start,
-                "End_Date": s_end,
-                "Status": "Not Started",
-                "Task": task, 
-                "Owner": owner, 
-                "Hours": float(hrs)
+                "Sprint": sprint, "Start_Date": s_start, "End_Date": s_end,
+                "Status": "Not Started", "Task": task, "Owner": owner, 
+                "Role": role, "Hours": float(hrs)
             }
 
         if i == 0:
             generated_plan.append(assign(f"Sprint {i}", lead_names, "Analysis Phase", "Lead", data["Analysis"]))
-            generated_plan.append(assign(f"Sprint {i}", qa_names, "TC Prep (60%)", "QA", data["TC_Prep"] * 0.6))
+            generated_plan.append(assign(f"Sprint {i}", qa_names, "TC preparation", "QA", data["TC_Prep"]))
         elif 0 < i < (num_sprints - 1):
-            div = max(1, num_sprints-2)
-            generated_plan.append(assign(f"Sprint {i}", dev_names, "Development Work", "Dev", data["Dev"]/div))
+            div = max(1, num_sprints - 2)
+            generated_plan.append(assign(f"Sprint {i}", dev_names, "Development Phase", "Dev", data["Dev"]/div))
+            generated_plan.append(assign(f"Sprint {i}", lead_names, "Code Review", "Lead", data["Review"]/div))
+            generated_plan.append(assign(f"Sprint {i}", qa_names, "QA testing", "QA", data["QA_Test"]/div))
+            generated_plan.append(assign(f"Sprint {i}", qa_names, "Integration Testing", "QA", data["Integ"]/div))
         elif i == (num_sprints - 1):
-            generated_plan.append(assign(f"Sprint {i}", ["DevOps"], "Deployment", "Ops", data["Deploy"]))
-            generated_plan.append(assign(f"Sprint {i}", qa_names, "Smoke Test", "QA", data["Smoke"]))
+            generated_plan.append(assign(f"Sprint {i}", dev_names, "Bug Fixes", "Dev", data["Fixes"]))
+            generated_plan.append(assign(f"Sprint {i}", qa_names, "Bug retest", "QA", data["Retest"]))
+            generated_plan.append(assign(f"Sprint {i}", qa_names, "Smoke test", "QA", data["Smoke"]))
+            generated_plan.append(assign(f"Sprint {i}", ["DevOps"], "Merge and Deploy", "Ops", data["Deploy"]))
 
-    return pd.DataFrame(generated_plan), sprint_caps, start_date, start_date + timedelta(days=num_sprints * sprint_days - 1)
+    return pd.DataFrame(generated_plan), sprint_caps
 
 # --- 3. Sidebar ---
 with st.sidebar:
-    st.header("👥 Team Setup")
-    d_count = st.number_input("Devs", 1, 10, 3); q_count = st.number_input("QA", 1, 10, 1); l_count = st.number_input("Leads", 1, 5, 1)
-    dev_names = [st.text_input(f"Dev {i+1}", f"D{i+1}", key=f"dn_{i}") for i in range(d_count)]
-    qa_names = [st.text_input(f"QA {i+1}", f"Q{i+1}", key=f"qn_{i}") for i in range(q_count)]
-    lead_names = [st.text_input(f"Lead {i+1}", f"L{i+1}", key=f"ln_{i}") for i in range(l_count)]
-    st.header("📅 Timeline Settings")
-    start_date_input = st.date_input("Project Start Date", datetime.now())
+    st.header("👥 Team List")
+    d_names = [st.text_input(f"Dev {i+1}", f"D{i+1}", key=f"d_{i}") for i in range(3)]
+    q_names = [st.text_input(f"QA {i+1}", f"Q{i+1}", key=f"q_{i}") for i in range(1)]
+    l_names = [st.text_input(f"Lead {i+1}", f"L{i+1}", key=f"l_{i}") for i in range(1)]
+    
+    st.divider()
+    daily_hrs = st.slider("Individual Daily Hrs", 4, 12, 8)
+    buffer_pct = st.slider("Capacity Buffer (%)", 0, 50, 10)
     num_sprints = st.selectbox("Total Sprints", range(2, 11), index=3)
-    sprint_days = 14; daily_hrs = 8; buffer_pct = 10
-    max_cap_base = sprint_days * daily_hrs
+    start_date_input = st.date_input("Start Date", datetime(2026, 2, 9))
 
 # --- 4. Main UI ---
 st.title("Jarvis Phase-Gate Manager")
 
-if st.session_state.master_plan is not None:
-    # Top Level Overview
-    st.subheader("📊 Project Vital Signs")
-    completed_total = st.session_state.master_plan[st.session_state.master_plan['Status'] == 'Completed']['Hours'].sum()
-    total_h = st.session_state.master_plan['Hours'].sum()
-    pct_total = (completed_total / total_h * 100) if total_h > 0 else 0
-    
-    o1, o2, o3 = st.columns([1, 1, 2])
-    o1.metric("Start Date", st.session_state.project_dates["Start"].strftime('%Y-%m-%d'))
-    o2.metric("End Date", st.session_state.project_dates["End"].strftime('%Y-%m-%d'))
-    with o3:
-        st.progress(pct_total / 100, text=f"Overall Project Completion: {pct_total:.1f}%")
+if st.session_state.project_dates["Start"]:
+    c1, c2, c3 = st.columns([1, 1, 2])
+    c1.metric("Start Date", st.session_state.project_dates["Start"].strftime('%Y-%m-%d'))
+    c2.metric("End Date", st.session_state.project_dates["End"].strftime('%Y-%m-%d'))
+    with c3:
+        done = st.session_state.master_plan[st.session_state.master_plan['Status'] == 'Completed']['Hours'].sum()
+        total = st.session_state.master_plan['Hours'].sum()
+        st.progress((done/total) if total > 0 else 0, text=f"Overall Project Completion: {(done/total*100):.1f}%")
 
-with st.expander("📥 Effort Baseline"):
-    inputs = {"Analysis": st.number_input("Analysis", 25.0), "Dev": 150.0, "TC_Prep": 40.0, "Smoke": 8.0, "Deploy": 6.0}
+with st.expander("📥 Effort Baseline", expanded=True):
+    col_a, col_b = st.columns(2)
+    with col_a:
+        analysis = st.number_input("Analysis Phase", 25.0); dev = st.number_input("Development Phase", 150.0)
+        fixes = st.number_input("Bug Fixes", 30.0); review = st.number_input("Code Review", 20.0)
+    with col_b:
+        qa_t = st.number_input("QA testing", 80.0); tc_p = st.number_input("TC preparation", 40.0)
+        retest = st.number_input("Bug retest", 15.0); integ = st.number_input("Integration Testing", 20.0)
+        smoke = st.number_input("Smoke test", 8.0); deploy = st.number_input("Merge and Deploy", 6.0)
 
 if st.button("🚀 GENERATE INITIAL PLAN", type="primary", use_container_width=True):
-    plan, caps, p_start, p_end = run_sequential_allocation(dev_names, qa_names, lead_names, inputs, max_cap_base, num_sprints, start_date_input, sprint_days, daily_hrs, buffer_pct)
+    inputs = {"Analysis": analysis, "Dev": dev, "Fixes": fixes, "Review": review, "QA_Test": qa_t, 
+              "TC_Prep": tc_p, "Retest": retest, "Integ": integ, "Smoke": smoke, "Deploy": deploy}
+    plan, caps = run_sequential_allocation(d_names, q_names, l_names, inputs, 14*daily_hrs, num_sprints, start_date_input, 14, daily_hrs, buffer_pct)
     st.session_state.master_plan = plan
     st.session_state.sprint_caps = caps
-    st.session_state.project_dates = {"Start": p_start, "End": p_end}
+    st.session_state.project_dates = {"Start": start_date_input, "End": start_date_input + timedelta(days=num_sprints*14-1)}
     st.rerun()
 
-# --- 5. Execution Section ---
+# --- 5. Summary & Editor Section ---
 if st.session_state.master_plan is not None:
-    # Resource Specific Gauges
-    st.subheader("👤 Individual Resource Performance")
-    resources = st.session_state.master_plan['Owner'].unique()
-    cols = st.columns(len(resources))
-    
-    for idx, member in enumerate(resources):
-        member_data = st.session_state.master_plan[st.session_state.master_plan['Owner'] == member]
-        m_total = member_data['Hours'].sum()
-        m_done = member_data[member_data['Status'] == 'Completed']['Hours'].sum()
-        m_pct = (m_done / m_total * 100) if m_total > 0 else 0
-        
-        with cols[idx]:
-            fig = go.Figure(go.Indicator(
-                mode = "gauge+number", value = m_pct,
-                title = {'text': f"{member}", 'font': {'size': 14}},
-                gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#636efa"}}
-            ))
-            fig.update_layout(height=180, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+    st.subheader("📋 Sprint Overview Summary")
+    summary = st.session_state.master_plan.groupby('Sprint').agg({'Hours': 'sum'}).reset_index()
+    summary['Capacity'] = summary['Sprint'].map(st.session_state.sprint_caps)
+    summary['Utilization %'] = (summary['Hours'] / summary['Capacity'] * 100).round(1).astype(str) + '%'
+    st.table(summary)
 
-    st.divider()
-    st.subheader("📝 Roadmap Editor")
+    st.subheader("🔍 Roadmap Editor")
+    role_filter = st.multiselect("Filter by Role", options=st.session_state.master_plan['Role'].unique(), default=st.session_state.master_plan['Role'].unique())
+    display_df = st.session_state.master_plan[st.session_state.master_plan['Role'].isin(role_filter)].copy()
+    
     st.session_state.master_plan = st.data_editor(
-        st.session_state.master_plan, use_container_width=True, key="main_editor",
+        display_df, use_container_width=True, key="main_editor",
         column_config={
-            "Status": st.column_config.SelectboxColumn("Status", options=["Not Started", "In Progress", "Completed"], required=True),
-            "Hours": st.column_config.NumberColumn("Hours", format="%.1f"),
+            "Status": st.column_config.SelectboxColumn("Status", options=["Not Started", "In Progress", "Completed"]),
+            "Hours": st.column_config.NumberColumn("Hours", format="%.2f"),
             "Start_Date": None, "End_Date": None
         }
     )
