@@ -13,14 +13,17 @@ if 'master_plan' not in st.session_state:
 if 'release_quality' not in st.session_state:
     st.session_state.release_quality = pd.DataFrame()
 if 'team_setup' not in st.session_state:
-    st.session_state.team_setup = {"devs": [], "qas": [], "leads": [], "capacity": 0}
+    st.session_state.team_setup = {"devs": [], "qas": [], "leads": [], "role_caps": {"Dev": 8, "QA": 8, "Lead": 8}}
 if 'planning_inputs' not in st.session_state:
     st.session_state.planning_inputs = {}
 
 # --- 2. Logic Engine ---
-def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, sprint_days):
+def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, sprint_days, buffer_pct):
     plan = []
     curr_dt = pd.to_datetime(start_date)
+    # Apply Sprint Buffer to available hours
+    efficiency_factor = (100 - buffer_pct) / 100
+    
     for i in range(num_sprints):
         s_start = curr_dt + timedelta(days=i * sprint_days)
         s_end = s_start + timedelta(days=sprint_days - 1)
@@ -62,7 +65,7 @@ if st.sidebar.button("🔃 Sync & Load Data", use_container_width=True, type="pr
             st.session_state.team_setup['devs'], st.session_state.team_setup['qas'],
             st.session_state.team_setup['leads'], st.session_state.planning_inputs,
             st.session_state.team_setup['num_sp'], st.session_state.team_setup['start_dt'],
-            st.session_state.team_setup['sp_days']
+            st.session_state.team_setup['sp_days'], st.session_state.team_setup.get('buffer', 0)
         )
         st.session_state.release_quality = pd.DataFrame([
             {"Sprint": f"Sprint {i}", "TCs Created": 0, "TCs Executed": 0, "Bugs Found": 0} 
@@ -70,24 +73,27 @@ if st.sidebar.button("🔃 Sync & Load Data", use_container_width=True, type="pr
         ])
         st.sidebar.success("Environment Synced!")
 
-# EXPORT TO EXCEL (Mocking PDF/Excel Export for Executive Summary)
-if st.session_state.master_plan is not None:
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        st.session_state.master_plan.to_excel(writer, sheet_name='Roadmap')
-        if not st.session_state.release_quality.empty:
-            st.session_state.release_quality.to_excel(writer, sheet_name='Quality_Metrics')
-    st.sidebar.download_button("📥 Export Executive Report", buffer.getvalue(), "Jarvis_Sprint_Report.xlsx", use_container_width=True)
-
 if st.sidebar.button("🗑️ Reset All Data", use_container_width=True):
-    for key in ['master_plan', 'release_quality', 'team_setup', 'planning_inputs']:
-        st.session_state[key] = None if key == 'master_plan' else (pd.DataFrame() if key == 'release_quality' else {})
+    st.session_state.master_plan = None
+    st.session_state.release_quality = pd.DataFrame()
     st.rerun()
 
 # --- PAGE: MASTER SETUP ---
 if page == "Master Setup":
     st.title("⚙️ Project & Team Configuration")
-    with st.expander("👥 Team Definition", expanded=True):
+    
+    with st.expander("🛡️ Role-Based Capacity & Buffer", expanded=True):
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            st.session_state.team_setup['buffer'] = st.slider("Sprint Buffer (%)", 0, 50, 10, help="Reserve % of capacity for unplanned tasks")
+        with bc2:
+            st.write("**Daily Max Hours by Role**")
+            rc1, rc2, rc3 = st.columns(3)
+            st.session_state.team_setup['role_caps']['Dev'] = rc1.number_input("Dev", 1, 24, 8)
+            st.session_state.team_setup['role_caps']['QA'] = rc2.number_input("QA", 1, 24, 8)
+            st.session_state.team_setup['role_caps']['Lead'] = rc3.number_input("Lead", 1, 24, 8)
+
+    with st.expander("👥 Team Definition", expanded=False):
         col1, col2, col3 = st.columns(3)
         with col1:
             d_sz = st.number_input("Dev Team Size", 1, 10, 3)
@@ -104,8 +110,6 @@ if page == "Master Setup":
         st.session_state.team_setup['start_dt'] = c1.date_input("Project Start", datetime(2026, 2, 9))
         st.session_state.team_setup['num_sp'] = c2.number_input("Total Sprints", 2, 24, 4)
         st.session_state.team_setup['sp_days'] = c3.number_input("Working Days/Sprint", 1, 60, 10)
-        daily_h = st.slider("Daily Max Hours", 1, 24, 8)
-        st.session_state.team_setup['capacity'] = st.session_state.team_setup['sp_days'] * daily_h
 
         st.subheader("Planning Inputs")
         pc1, pc2 = st.columns(2)
@@ -121,18 +125,32 @@ if page == "Master Setup":
 elif page == "Roadmap Editor":
     st.title("🗺️ Roadmap Editor")
     if st.session_state.master_plan is not None:
+        # Validation Warnings Logic
+        sp_days = st.session_state.team_setup['sp_days']
+        buffer_pct = st.session_state.team_setup.get('buffer', 0)
+        
+        usage = st.session_state.master_plan.groupby(['Sprint', 'Owner', 'Role'])['Hours'].sum().reset_index()
+        
+        for index, row in usage.iterrows():
+            role_limit = st.session_state.team_setup['role_caps'].get(row['Role'], 8)
+            net_capacity = (role_limit * sp_days) * ((100 - buffer_pct) / 100)
+            
+            if row['Hours'] > net_capacity:
+                st.error(f"⚠️ **Validation Warning:** {row['Owner']} ({row['Role']}) has {row['Hours']}h in {row['Sprint']}. Max available after {buffer_pct}% buffer is {net_capacity}h.")
+        
         st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
     else:
         st.info("Sync data in sidebar to start.")
 
 # --- PAGE: RESOURCE SPLIT-UP ---
 elif page == "Resource Split-up":
-    st.title("📊 Resource Intelligence")
+    st.title("📊 Resource Balancing & Intelligence")
     if st.session_state.master_plan is not None:
-        cap = st.session_state.team_setup['capacity']
-        util = st.session_state.master_plan.groupby(['Owner', 'Sprint'])['Hours'].sum().reset_index()
-        util['Utilization %'] = (util['Hours'] / cap * 100).round(1)
-        st.plotly_chart(px.bar(util, x='Sprint', y='Utilization %', color='Owner', barmode='group', title="Sprint Utilization vs Capacity"), use_container_width=True)
+        # Resource Balancing View
+        st.subheader("Team Resource Balancing (Load vs Capacity)")
+        balance_df = st.session_state.master_plan.groupby(['Owner', 'Role', 'Sprint'])['Hours'].sum().reset_index()
+        fig_bal = px.bar(balance_df, x='Owner', y='Hours', color='Sprint', barmode='group', title="Resource Load Balancing")
+        st.plotly_chart(fig_bal, use_container_width=True)
         
         st.divider()
         owners = st.session_state.master_plan["Owner"].unique()
@@ -148,4 +166,4 @@ elif page == "Quality Metrics":
     if not st.session_state.release_quality.empty:
         st.session_state.release_quality = st.data_editor(st.session_state.release_quality, use_container_width=True)
         q = st.session_state.release_quality
-        st.plotly_chart(px.line(q, x="Sprint", y="Bugs Found", title="Defect Trend Line", markers=True))
+        st.plotly_chart(px.line(q, x="Sprint", y="Bugs Found", title="Defect Discovery Trend", markers=True))
