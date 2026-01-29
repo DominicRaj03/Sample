@@ -4,9 +4,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
+# --- FIX: Ensure Matplotlib is handled for Pandas Styler ---
+try:
+    import matplotlib
+except ImportError:
+    # If matplotlib is missing, we will use a CSS-based fallback for the heatmap
+    pass
+
 st.set_page_config(page_title="Jarvis Executive Intelligence", layout="wide")
 
-# --- 1. Persistent Memory & State Management ---
+# --- 1. Persistent Memory ---
 if 'master_plan' not in st.session_state:
     st.session_state.master_plan = None
 if 'quality_data' not in st.session_state:
@@ -33,8 +40,12 @@ def run_allocation(dev_names, qa_names, lead_names, data, num_sprints, start_dat
             if total_hrs <= 0: return
             split = float(total_hrs) / len(names)
             for name in names:
-                generated_plan.append({"Sprint": s_label, "Start": s_start, "Finish": s_end, "Task": task, "Owner": name, "Role": role, "Hours": round(split, 1)})
+                generated_plan.append({
+                    "Sprint": s_label, "Start": s_start, "Finish": s_end, 
+                    "Task": task, "Owner": name, "Role": role, "Hours": round(split, 1)
+                })
 
+        # Multi-Phase Mapping
         if i == 0:
             assign("Analysis Phase", "Lead", lead_names, data["Analysis"])
             assign("TC preparation", "QA", qa_names, data["TC_Prep"])
@@ -74,46 +85,46 @@ def balance_resources(df, capacity):
                     excess -= transfer
     return new_df
 
-# --- 3. Sidebar UI ---
+# --- 3. Sidebar ---
 with st.sidebar:
-    st.header("👥 Team")
-    devs = [st.text_input(f"Dev {j+1}", f"Dev_{j+1}", key=f"d{j}") for j in range(3)]
-    qas = [st.text_input(f"QA {j+1}", f"QA_{j+1}", key=f"q{j}") for j in range(1)]
-    leads = [st.text_input(f"Lead {j+1}", f"Lead_{j+1}", key=f"l{j}") for j in range(1)]
+    st.header("👥 Team Setup")
+    devs = [st.text_input(f"D{j+1}", f"Dev_{j+1}", key=f"d{j}") for j in range(3)]
+    qas = [st.text_input(f"Q{j+1}", f"QA_{j+1}", key=f"q{j}") for j in range(1)]
+    leads = [st.text_input(f"L{j+1}", f"Lead_{j+1}", key=f"l{j}") for j in range(1)]
     st.divider()
-    start_dt = st.date_input("Project Start", datetime(2026, 2, 9))
-    sprint_num = st.number_input("Total Sprints", 2, 10, 4)
+    start_dt = st.date_input("Start", datetime(2026, 2, 9))
+    sprint_num = st.number_input("Sprints", 2, 10, 4)
     sprint_len = st.number_input("Days/Sprint", 1, 20, 8)
-    max_hrs = st.slider("Daily Max Hours", 4, 12, 8)
-    sync = st.button("🔄 Sync & Fix Displays", type="primary", use_container_width=True)
+    max_hrs = st.slider("Daily Max", 4, 12, 8)
+    sync = st.button("🔄 Sync & Resolve Error", type="primary", use_container_width=True)
 
-# --- 4. Main Interface ---
+# --- 4. Main UI ---
 st.title("Jarvis Phase-Gate Intelligence")
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Roadmap", "📊 Analytics", "🎯 Quality", "📈 Trends"])
 capacity = sprint_len * max_hrs
 
 with tab1:
-    c1, c2 = st.columns(2)
-    with c1:
+    col1, col2 = st.columns(2)
+    with col1:
         vals = {
-            "Analysis": st.number_input("Analysis", 0.0, 500.0, 25.0),
-            "Dev": st.number_input("Development", 0.0, 1000.0, 350.0),
+            "Analysis": st.number_input("Analysis Phase", 0.0, 500.0, 25.0),
+            "Dev": st.number_input("Development Phase", 0.0, 1000.0, 350.0),
             "Fixes": st.number_input("Bug Fixes", 0.0, 500.0, 20.0),
             "Review": st.number_input("Code Review", 0.0, 200.0, 18.0),
             "QA_Test": st.number_input("QA testing", 0.0, 500.0, 85.0)
         }
-    with c2:
+    with col2:
         vals.update({
             "TC_Prep": st.number_input("TC preparation", 0.0, 500.0, 20.0),
             "Retest": st.number_input("Bug retest", 0.0, 200.0, 10.0),
-            "Integ": st.number_input("Integration", 0.0, 200.0, 20.0),
+            "Integ": st.number_input("Integration Testing", 0.0, 200.0, 20.0),
             "Smoke": st.number_input("Smoke test", 0.0, 100.0, 5.0),
-            "Deploy": st.number_input("Merge & Deploy", 0.0, 100.0, 6.0)
+            "Deploy": st.number_input("Merge and Deploy", 0.0, 100.0, 6.0)
         })
 
-    if st.button("🚀 GENERATE & FIX VIEW", use_container_width=True) or sync:
+    if st.button("🚀 GENERATE DATA", use_container_width=True) or sync:
         st.session_state.master_plan = run_allocation(devs, qas, leads, vals, sprint_num, start_dt, sprint_len)
-        st.session_state.quality_data = pd.DataFrame([{"Sprint": f"Sprint {i}", "TC": 20, "QA Bugs": 2, "Leakage": 1} for i in range(sprint_num)])
+        st.session_state.quality_data = pd.DataFrame([{"Sprint": f"Sprint {i}", "TC": 20, "QA Bugs": 1, "Leakage": 0} for i in range(sprint_num)])
         st.rerun()
 
     if st.session_state.master_plan is not None:
@@ -121,28 +132,28 @@ with tab1:
             st.session_state.master_plan = balance_resources(st.session_state.master_plan, capacity); st.rerun()
         st.data_editor(st.session_state.master_plan, use_container_width=True)
 
-with tab2: # FIXED ANALYTICS
+with tab2:
     if st.session_state.master_plan is not None:
-        st.subheader("Process Gantt & Workload")
-        # Gantt Chart
-        fig_gantt = px.timeline(st.session_state.master_plan, x_start="Start", x_end="Finish", y="Task", color="Role", title="Timeline Detail")
+        st.subheader("Workload & Sequencing")
+        # Gantt Chart (Plotly - does not require matplotlib)
+        fig_gantt = px.timeline(st.session_state.master_plan, x_start="Start", x_end="Finish", y="Owner", color="Task", title="Task Sequence per Resource")
         fig_gantt.update_yaxes(autorange="reversed")
         st.plotly_chart(fig_gantt, use_container_width=True)
-        # Heatmap
-        usage = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
-        st.write("**Resource Workload Heatmap (Hours)**")
-        st.dataframe(usage.style.background_gradient(cmap="Reds", axis=None), use_container_width=True)
-
-with tab4: # FIXED TRENDS
-    if not st.session_state.quality_data.empty:
-        st.subheader("Defect Leakage & Maturity Trends")
-        q = st.session_state.quality_data
-        q["Leak Rate (%)"] = (q["Leakage"] / (q["QA Bugs"] + q["Leakage"]).replace(0,1) * 100).round(2)
         
-        c_a, c_b = st.columns(2)
-        with c_a:
-            fig_leak = px.area(q, x="Sprint", y="Leak Rate (%)", title="Defect Leakage Trend", markers=True)
-            st.plotly_chart(fig_leak, use_container_width=True)
-        with c_b:
-            fig_bar = px.bar(q, x="Sprint", y=["QA Bugs", "Leakage"], title="Bug Detection Breakdown", barmode="group")
-            st.plotly_chart(fig_bar, use_container_width=True)
+        # FIXED HEATMAP LOGIC
+        usage = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
+        st.write("**Resource Workload Heatmap**")
+        try:
+            # Try applying the gradient
+            st.dataframe(usage.style.background_gradient(cmap="Reds", axis=None), use_container_width=True)
+        except Exception:
+            # Fallback: Red text for over-capacity, no gradient
+            st.warning("Matplotlib not found. Displaying raw hours with capacity highlight.")
+            st.dataframe(usage.style.map(lambda x: 'color: red; font-weight: bold' if x > capacity else ''), use_container_width=True)
+
+with tab4:
+    if not st.session_state.quality_data.empty:
+        st.subheader("Quality Trends")
+        q = st.session_state.quality_data
+        fig_leak = px.line(q, x="Sprint", y="QA Bugs", title="Bug Detection History", markers=True)
+        st.plotly_chart(fig_leak, use_container_width=True)
