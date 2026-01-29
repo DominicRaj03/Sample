@@ -8,14 +8,13 @@ import io
 st.set_page_config(page_title="Jarvis - Sprint planning", layout="wide")
 
 # --- 1. Persistent State Initialization ---
-# This block ensures that every UI component is backed by session_state
 if 'master_plan' not in st.session_state:
     st.session_state.master_plan = None
 if 'release_quality' not in st.session_state:
     st.session_state.release_quality = pd.DataFrame()
 if 'team_setup' not in st.session_state:
     st.session_state.team_setup = {
-        'devs': ["Solaimalai", "Ananth", "Surya"], # Default values from your setup
+        'devs': ["Solaimalai", "Ananth", "Surya"], 
         'qas': ["Noah"], 
         'leads': ["Narmadha"], 
         'num_sp': 4, 
@@ -25,7 +24,6 @@ if 'team_setup' not in st.session_state:
         'role_caps': {'Dev': 8, 'QA': 8, 'Lead': 8}
     }
 if 'planning_inputs' not in st.session_state:
-    # Initialize all lifecycle fields to zero to prevent erase on navigation
     st.session_state.planning_inputs = {
         "Analysis Phase": 0.0, "Development Phase": 0.0, "Bug Fixes": 0.0,
         "Code Review": 0.0, "QA testing": 0.0, "TC preparation": 0.0,
@@ -72,7 +70,6 @@ page = st.sidebar.radio("Go to:", ["Master Setup", "Roadmap Editor", "Resource S
 st.sidebar.divider()
 st.sidebar.subheader("🔄 Central Control")
 
-# SYNC & LOAD: Propagates current state to all pages
 if st.sidebar.button("🔃 Sync & Load Data", use_container_width=True, type="primary"):
     st.session_state.master_plan = run_allocation(
         st.session_state.team_setup['devs'], st.session_state.team_setup['qas'],
@@ -86,7 +83,6 @@ if st.sidebar.button("🔃 Sync & Load Data", use_container_width=True, type="pr
     ])
     st.sidebar.success("Global State Synced!")
 
-# RESET ALL: Clears the state manually
 if st.sidebar.button("🗑️ Reset All Data", use_container_width=True):
     for key in ['master_plan', 'release_quality', 'team_setup', 'planning_inputs']:
         st.session_state.pop(key, None)
@@ -108,7 +104,6 @@ if page == "Master Setup":
 
     with st.expander("👥 Team Definition", expanded=False):
         col1, col2, col3 = st.columns(3)
-        # Using session_state for text inputs ensures values persist on navigation
         with col1:
             d_sz = st.number_input("Dev Team Size", 1, 10, len(st.session_state.team_setup['devs']))
             st.session_state.team_setup['devs'] = [st.text_input(f"Dev {j+1}", st.session_state.team_setup['devs'][j] if j < len(st.session_state.team_setup['devs']) else f"Dev_{j+1}", key=f"d{j}") for j in range(d_sz)]
@@ -127,7 +122,6 @@ if page == "Master Setup":
 
         st.subheader("Planning Inputs")
         pc1, pc2 = st.columns(2)
-        # Lifecycle fields mapped to persistent session state
         with pc1:
             for field in ["Analysis Phase", "Development Phase", "Bug Fixes", "Code Review", "QA testing"]:
                 st.session_state.planning_inputs[field] = st.number_input(field, value=st.session_state.planning_inputs.get(field, 0.0))
@@ -137,9 +131,25 @@ if page == "Master Setup":
 
 # --- PAGE: ROADMAP EDITOR ---
 elif page == "Roadmap Editor":
-    st.title("🗺️ Roadmap Editor")
+    st.title("🗺️ Roadmap & Gantt Timeline")
     if st.session_state.master_plan is not None:
-        # Validation logic remains active during manual edits
+        # --- GANTT CHART ADDITION ---
+        st.subheader("🗓️ Calendar Timeline")
+        fig = px.timeline(
+            st.session_state.master_plan, 
+            x_start="Start", 
+            x_end="Finish", 
+            y="Task", 
+            color="Owner",
+            hover_data=["Sprint", "Hours", "Role"],
+            title="Day-to-Day Task Distribution"
+        )
+        fig.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.divider()
+
+        # Validation logic
         sp_days = st.session_state.team_setup['sp_days']
         buffer_pct = st.session_state.team_setup['buffer']
         usage = st.session_state.master_plan.groupby(['Sprint', 'Owner', 'Role'])['Hours'].sum().reset_index()
@@ -148,8 +158,9 @@ elif page == "Roadmap Editor":
             role_limit = st.session_state.team_setup['role_caps'].get(row['Role'], 8)
             net_cap = (role_limit * sp_days) * ((100 - buffer_pct) / 100)
             if row['Hours'] > net_cap:
-                st.error(f"⚠️ Capacity Breach: {row['Owner']} ({row['Hours']}h > {net_cap}h limit)")
+                st.error(f"⚠️ Capacity Breach: {row['Owner']} ({row['Hours']}h > {net_cap}h limit in {row['Sprint']})")
         
+        st.subheader("📝 Live Roadmap Data Editor")
         st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
     else:
         st.info("Sync Data in Sidebar to load the Roadmap.")
@@ -174,4 +185,3 @@ elif page == "Quality Metrics":
     if not st.session_state.release_quality.empty:
         st.session_state.release_quality = st.data_editor(st.session_state.release_quality, use_container_width=True)
         st.plotly_chart(px.line(st.session_state.release_quality, x="Sprint", y="Bugs Found", markers=True, title="Defect Trend"))
-
