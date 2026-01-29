@@ -63,7 +63,7 @@ def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, spr
             assign("Merge and Deploy", "Ops", ["DevOps"], planning_data["Merge and Deploy"])
     return pd.DataFrame(plan)
 
-# --- 3. Sidebar Navigation ---
+# --- 3. Sidebar Navigation & Central Controls ---
 st.sidebar.title("💠 Jarvis Navigation")
 page = st.sidebar.radio("Go to:", ["Master Setup", "Roadmap Editor", "Resource Split-up", "Quality Metrics"])
 
@@ -87,21 +87,20 @@ if st.sidebar.button("🔃 Sync & Load Data", use_container_width=True, type="pr
 if page == "Roadmap Editor":
     st.title("🗺️ Roadmap & Gantt Timeline")
     if st.session_state.master_plan is not None:
-        # Top Row: Metrics and Export
-        col_m1, col_m2 = st.columns([3, 1])
-        with col_m1:
-            st.subheader("🗓️ Calendar Timeline with Sprint Markers")
-        with col_m2:
-            # CSV Export Functionality
-            csv = st.session_state.master_plan.to_csv(index=False).encode('utf-8')
-            st.download_button(label="📥 Export Roadmap (CSV)", data=csv, file_name='sprint_roadmap.csv', mime='text/csv')
-
-        # 1. Gantt Chart with Sprint Markers
+        st.subheader("🗓️ Calendar Timeline with Sprint Markers")
+        
+        # Gantt Chart Base
         fig = px.timeline(
-            st.session_state.master_plan, x_start="Start", x_end="Finish", y="Task", color="Owner",
-            hover_data=["Sprint", "Hours", "Role"], title="Day-to-Day Task Distribution"
+            st.session_state.master_plan, 
+            x_start="Start", 
+            x_end="Finish", 
+            y="Task", 
+            color="Owner",
+            hover_data=["Sprint", "Hours", "Role"],
+            title="Day-to-Day Task Distribution"
         )
         
+        # Adding Vertical Sprint Phase Markers
         sprint_count = st.session_state.team_setup['num_sp']
         start_date = pd.to_datetime(st.session_state.team_setup['start_dt'])
         sprint_days = st.session_state.team_setup['sp_days']
@@ -114,19 +113,29 @@ if page == "Roadmap Editor":
         fig.update_yaxes(autorange="reversed")
         st.plotly_chart(fig, use_container_width=True)
 
-        st.divider()
-
-        # 2. Sprint-wise Hours Split-up
-        st.subheader("📊 Sprint Effort Breakdown")
-        effort_df = st.session_state.master_plan.groupby(['Sprint', 'Task'])['Hours'].sum().reset_index()
-        fig_bar = px.bar(effort_df, x="Sprint", y="Hours", color="Task", barmode="group", text_auto=True)
-        st.plotly_chart(fig_bar, use_container_width=True)
-
+        # Remaining logic for validation and data editor
         st.divider()
         st.subheader("📝 Live Roadmap Data Editor")
         st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
     else:
         st.info("Sync Data in Sidebar to load the Roadmap.")
 
-# --- REMAINING PAGES (Master Setup, Resource, Quality) ---
-# [Include Master Setup, Resource Split-up, and Quality Metrics logic from previous builds]
+# --- PAGE: MASTER SETUP ---
+elif page == "Master Setup":
+    st.title("⚙️ Project & Team Configuration")
+    # (Setup logic remains identical to preserve persistent values)
+    with st.expander("🛡️ Role-Based Capacity & Buffer", expanded=True):
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            st.session_state.team_setup['buffer'] = st.slider("Sprint Buffer (%)", 0, 50, st.session_state.team_setup.get('buffer', 10))
+        with bc2:
+            rc1, rc2, rc3 = st.columns(3)
+            st.session_state.team_setup['role_caps']['Dev'] = rc1.number_input("Dev Cap", 1, 24, st.session_state.team_setup['role_caps']['Dev'])
+            st.session_state.team_setup['role_caps']['QA'] = rc2.number_input("QA Cap", 1, 24, st.session_state.team_setup['role_caps']['QA'])
+            st.session_state.team_setup['role_caps']['Lead'] = rc3.number_input("Lead Cap", 1, 24, st.session_state.team_setup['role_caps']['Lead'])
+    
+    with st.expander("📅 Sprint Schedule & Effort", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        st.session_state.team_setup['start_dt'] = c1.date_input("Project Start", st.session_state.team_setup['start_dt'])
+        st.session_state.team_setup['num_sp'] = c2.number_input("Total Sprints", 2, 24, st.session_state.team_setup['num_sp'])
+        st.session_state.team_setup['sp_days'] = c3.number_input("Working Days/Sprint", 1, 60, st.session_state.team_setup['sp_days'])
