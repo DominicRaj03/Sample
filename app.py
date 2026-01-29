@@ -14,7 +14,7 @@ if 'quality_data' not in st.session_state:
 
 # --- 2. Allocation Logic ---
 def run_allocation(devs, qas, leads, data, num_sprints, start_date, sprint_days):
-    generated_plan = []
+    plan = []
     for i in range(num_sprints):
         s_start = start_date + timedelta(days=i * sprint_days)
         s_end = s_start + timedelta(days=sprint_days - 1)
@@ -24,10 +24,8 @@ def run_allocation(devs, qas, leads, data, num_sprints, start_date, sprint_days)
             if total_hrs <= 0: return
             split = float(total_hrs) / len(names)
             for name in names:
-                generated_plan.append({
-                    "Sprint": s_label, "Start": s_start, "Finish": s_end, 
-                    "Task": task, "Owner": name, "Role": role, "Hours": round(split, 1)
-                })
+                plan.append({"Sprint": s_label, "Start": s_start, "Finish": s_end, 
+                             "Task": task, "Owner": name, "Role": role, "Hours": round(split, 1)})
 
         if i == 0:
             assign("Analysis Phase", "Lead", leads, data["Analysis"])
@@ -36,91 +34,76 @@ def run_allocation(devs, qas, leads, data, num_sprints, start_date, sprint_days)
             mid = max(1, num_sprints - 2)
             assign("Development Phase", "Dev", devs, data["Dev"]/mid)
             assign("Code Review", "Lead", leads, data["Review"]/mid)
-            assign("QA Testing & Bug Retest", "QA", qas, data["QA_Test"]/mid)
-            assign("Bug Fixes (Initial)", "Dev", devs, data["Fixes"]/mid)
+            assign("QA Testing", "QA", qas, data["QA_Test"]/mid)
         elif i == (num_sprints - 1):
             assign("Integration Testing", "QA", qas, data["Integ"])
-            assign("Bug Fixes (Integration)", "Dev", devs, data["Fixes_Integ"])
             assign("Merge and Deploy", "Ops", ["DevOps"], data["Deploy"])
-            
-    return pd.DataFrame(generated_plan)
+    return pd.DataFrame(plan)
 
-# --- 3. UI Layout ---
+# --- 3. Initial Team Input ---
 st.title("Jarvis Phase-Gate Intelligence")
 
-with st.expander("👥 Step 1: Team & Timeline Setup", expanded=st.session_state.master_plan is None):
-    c1, c2, c3 = st.columns(3)
-    dev_list = [st.text_input(f"Dev {j+1}", f"Dev_{j+1}", key=f"d_u_{j}") for j in range(3)]
-    qa_list = [st.text_input(f"QA {j+1}", f"QA_{j+1}", key=f"q_u_{j}") for j in range(1)]
-    lead_list = [st.text_input(f"Lead {j+1}", f"Lead_{j+1}", key=f"l_u_{j}") for j in range(1)]
+with st.expander("👥 Team Setup & Capacity Settings", expanded=st.session_state.master_plan is None):
+    col_t1, col_t2, col_t3 = st.columns(3)
+    with col_t1:
+        d_size = st.number_input("Dev Team Size", 1, 10, 3)
+        dev_list = [st.text_input(f"Dev {j+1}", f"Dev_{j+1}", key=f"d{j}") for j in range(d_size)]
+    with col_t2:
+        q_size = st.number_input("QA Team Size", 1, 5, 1)
+        qa_list = [st.text_input(f"QA {j+1}", f"QA_{j+1}", key=f"q{j}") for j in range(q_size)]
+    with col_t3:
+        l_size = st.number_input("Lead Team Size", 1, 5, 1)
+        lead_list = [st.text_input(f"Lead {j+1}", f"Lead_{j+1}", key=f"l{j}") for j in range(l_size)]
     
     st.divider()
     sc1, sc2, sc3 = st.columns(3)
-    start_dt = sc1.date_input("Start Date", datetime(2026, 2, 9))
-    num_sp = sc2.number_input("Sprints", 2, 10, 4)
-    sp_len = sc3.number_input("Days/Sprint", 1, 20, 8)
-    capacity = sp_len * 8
+    start_dt = sc1.date_input("Project Start", datetime(2026, 2, 9))
+    num_sp = sc2.number_input("Total Sprints", 2, 10, 4)
+    sp_days = sc3.number_input("Working Days/Sprint", 1, 20, 8)
+    daily_limit = st.slider("Max Daily Hours", 4, 12, 8)
+    capacity = sp_days * daily_limit
 
-tab1, tab2, tab3 = st.tabs(["🗺️ Roadmap Editor", "📊 Analytics & Export", "🎯 Quality & Forecast"])
+tab1, tab2, tab3 = st.tabs(["🗺️ Roadmap Editor", "📊 Analytics & Export", "🎯 Quality Metrics"])
 
 with tab1:
-    st.subheader("🛠️ Effort Baseline")
-    ec1, ec2 = st.columns(2)
-    with ec1:
-        vals = {
-            "Analysis": st.number_input("Analysis (Hrs)", 25.0),
-            "Dev": st.number_input("Development (Hrs)", 350.0),
-            "Fixes": st.number_input("Initial Bug Fixes (Hrs)", 20.0)
-        }
-    with ec2:
-        vals.update({
-            "Review": st.number_input("Code Review (Hrs)", 18.0),
-            "QA_Test": st.number_input("QA Testing (Hrs)", 85.0),
-            "TC_Prep": st.number_input("TC Prep (Hrs)", 20.0),
-            "Integ": st.number_input("Integration (Hrs)", 20.0),
-            "Fixes_Integ": st.number_input("Integration Bug Fixes (Hrs)", 15.0),
-            "Deploy": st.number_input("Deployment (Hrs)", 6.0)
-        })
-
+    # Effort Inputs
+    vals = {"Analysis": 25.0, "Dev": 350.0, "Review": 18.0, "QA_Test": 85.0, "TC_Prep": 20.0, "Integ": 20.0, "Deploy": 6.0}
     if st.button("🚀 GENERATE DATA", use_container_width=True):
-        st.session_state.master_plan = run_allocation(dev_list, qa_list, lead_list, vals, num_sp, start_dt, sp_len)
-        # Initialize Quality Data to prevent blank tab
-        st.session_state.quality_data = pd.DataFrame([
-            {"Sprint": f"Sprint {i}", "Test Cases": 0, "Bugs Found": 0} for i in range(num_sp)
-        ])
+        st.session_state.master_plan = run_allocation(dev_list, qa_list, lead_list, vals, num_sp, start_dt, sp_days)
+        st.session_state.quality_data = pd.DataFrame([{"Sprint": f"Sprint {i}", "Bugs Found": 0, "Test Cases": 20} for i in range(num_sp)])
         st.rerun()
 
     if st.session_state.master_plan is not None:
-        # Granular Split View
-        sel_sprint = st.selectbox("Select Sprint to Inspect", st.session_state.master_plan["Sprint"].unique())
-        st.write(f"### Resource Task Split: {sel_sprint}")
-        st.dataframe(st.session_state.master_plan[st.session_state.master_plan["Sprint"] == sel_sprint][["Owner", "Task", "Hours", "Role"]], use_container_width=True)
-        
-        # Validation Warnings
+        # VALIDATION WARNINGS
         usage = st.session_state.master_plan.groupby(['Sprint', 'Owner'])['Hours'].sum().reset_index()
-        over = usage[usage['Hours'] > capacity]
-        for _, row in over.iterrows():
+        overloaded = usage[usage['Hours'] > capacity]
+        for _, row in overloaded.iterrows():
             st.warning(f"⚠️ Capacity Alert: {row['Owner']} has {row['Hours']}h in {row['Sprint']} (Limit: {capacity}h)")
 
-with tab2:
-    if st.session_state.master_plan is not None:
-        st.subheader("Task Sequence per Resource")
-        fig = px.timeline(st.session_state.master_plan, x_start="Start", x_end="Finish", y="Owner", color="Task")
-        fig.update_yaxes(autorange="reversed")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Sprint Comparison
-        comparison = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
-        st.write("**Resource Workload Summary**")
-        st.dataframe(comparison.style.highlight_max(axis=1), use_container_width=True)
+        # Resource/Sprint Split View
+        sel_sprint = st.selectbox("Sprint Inspector", st.session_state.master_plan["Sprint"].unique())
+        st.dataframe(st.session_state.master_plan[st.session_state.master_plan["Sprint"] == sel_sprint], use_container_width=True)
+        st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
 
-with tab3: # Quality & Forecast
-    if not st.session_state.quality_data.empty:
-        st.subheader("Quality Metric Insights")
-        q_df = st.data_editor(st.session_state.quality_data, use_container_width=True)
+with tab2: # SPRINT COMPARISON
+    if st.session_state.master_plan is not None:
+        st.subheader("Workload Analytics")
+        comparison = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
+        st.dataframe(comparison.style.highlight_max(axis=1, color="#501010"), use_container_width=True)
         
-        # Analytics Calculation
-        q_df["Productivity"] = (q_df["Test Cases"] / 20).round(2) # Example factor
-        q_df["Predicted Risk"] = (q_df["Bugs Found"] * 1.5).round(1)
-        st.write("**Forecasted Quality Risk Table**")
-        st.table(q_df)
+        # EXPORT
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            st.session_state.master_plan.to_excel(writer, sheet_name='Roadmap', index=False)
+            comparison.to_excel(writer, sheet_name='Comparison')
+        st.download_button("📥 Export to Excel", buffer.getvalue(), "Jarvis_Report.xlsx", use_container_width=True)
+
+with tab3: # QUALITY
+    if not st.session_state.quality_data.empty:
+        st.subheader("Sprint Quality & Risk Forecast")
+        st.session_state.quality_data = st.data_editor(st.session_state.quality_data, use_container_width=True)
+        # Calculate derived metrics
+        q = st.session_state.quality_data
+        q["Productivity"] = (q["Test Cases"] / 20).round(2)
+        q["Predicted Risk"] = (q["Bugs Found"] * 1.2).round(1)
+        st.table(q)
