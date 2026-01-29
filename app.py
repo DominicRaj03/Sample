@@ -1,92 +1,83 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
-st.set_page_config(page_title="Jarvis Persistent Manager", layout="wide")
+st.set_page_config(page_title="Jarvis Persistent Editor", layout="wide")
 
-# --- Initialize Persistent Storage ---
-if 'master_plan' not in st.session_state:
-    st.session_state.master_plan = None
-if 'caps' not in st.session_state:
-    st.session_state.caps = {}
+# --- 1. Initialize Memory (Session State) ---
+# This acts as the "database" for the current session
+if 'roadmap_data' not in st.session_state:
+    st.session_state.roadmap_data = None  # Holds the DataFrame
+if 'generation_trigger' not in st.session_state:
+    st.session_state.generation_trigger = False
 
-def calculate_base_plan(dev_names, qa_names, lead_names, data, base_cap, num_sprints):
-    generated_plan = []
+# --- 2. Allocation Logic ---
+def generate_initial_roadmap(dev_names, qa_names, lead_names, inputs, num_sprints):
+    data = []
     sprint_list = [f"Sprint {i}" for i in range(num_sprints)]
-    all_staff = dev_names + qa_names + lead_names + ["DevOps"]
-    resource_load = {s: {name: 0 for name in all_staff} for s in sprint_list}
     
-    # Simple assignment helper
-    def assign(sprint, names, task, role, hrs):
-        owner = min(names, key=lambda x: resource_load[sprint][x])
-        resource_load[sprint][owner] += hrs
-        return {"Sprint": sprint, "Task": task, "Owner": owner, "Role": role, "Hours": float(hrs)}
-
-    # Logic: Sprint 0 (Analysis + 60% TC Prep)
-    generated_plan.append(assign("Sprint 0", lead_names, "Analysis", "Lead", data["Analysis"]))
-    generated_plan.append(assign("Sprint 0", qa_names, "TC Prep (60%)", "QA", data["TC_Prep"] * 0.6))
-
-    # Logic: Sprints 1 to N-1 (Dev Start)
+    # Simple Sequential Logic for the initial "Draft"
+    # Sprint 0
+    data.append({"Sprint": "Sprint 0", "Task": "Analysis & Setup", "Owner": lead_names[0], "Hours": float(inputs["Analysis"])})
+    
+    # Middle Sprints (Dev & QA)
+    dev_share = inputs["Dev"] / max(1, (num_sprints - 2))
     for i in range(1, num_sprints - 1):
-        s_name = f"Sprint {i}"
-        generated_plan.append(assign(s_name, dev_names, "Development Work", "Dev", data["Dev"]/(num_sprints-2)))
-        
-    # Logic: Sprint 2 (Remaining 40% TC Prep)
-    if num_sprints > 2:
-        generated_plan.append(assign("Sprint 2", qa_names, "TC Prep (Remaining 40%)", "QA", data["TC_Prep"] * 0.4))
-
-    # Logic: Final Sprint (Release/Stabilization)
-    last_s = f"Sprint {num_sprints-1}"
-    generated_plan.append(assign(last_s, dev_names, "Bug Fixes", "Dev", data["Fixes"]))
-    generated_plan.append(assign(last_s, qa_names, "Smoke Test", "QA", data["Smoke"]))
-
-    return pd.DataFrame(generated_plan)
-
-# --- Sidebar Configuration ---
-with st.sidebar:
-    st.header("👥 Team Split")
-    d_val = st.number_input("Developers", 1, 10, 3)
-    q_val = st.number_input("QA", 1, 10, 1)
-    l_val = st.number_input("Lead", 1, 5, 1)
+        data.append({"Sprint": f"Sprint {i}", "Task": "Development", "Owner": dev_names[0], "Hours": float(dev_share)})
     
-    num_sprints = st.slider("Total Sprints", 2, 10, 4)
-    st.divider()
-    if st.button("🚀 GENERATE NEW PLAN", type="primary", use_container_width=True):
-        devs = [f"Dev_{i+1}" for i in range(d_val)]
-        qas = [f"QA_{i+1}" for i in range(q_val)]
-        leads = [f"Lead_{i+1}" for i in range(l_val)]
-        
-        # Hardcoded defaults for calculation
-        efforts = {"Analysis": 20, "TC_Prep": 40, "Dev": 120, "Fixes": 20, "Smoke": 10}
-        
-        # Save to session state
-        st.session_state.master_plan = calculate_base_plan(devs, qas, leads, efforts, 80, num_sprints)
-        st.rerun()
+    # Last Sprint
+    data.append({"Sprint": sprint_list[-1], "Task": "Deployment & Smoke", "Owner": "DevOps", "Hours": float(inputs["Deploy"])})
+    
+    return pd.DataFrame(data)
 
-# --- Main Dashboard ---
+# --- 3. Sidebar Inputs ---
+with st.sidebar:
+    st.header("👥 Team")
+    dev_names = [st.text_input("Dev Name", "D1")]
+    qa_names = [st.text_input("QA Name", "Q1")]
+    lead_names = [st.text_input("Lead Name", "L1")]
+    num_sprints = st.number_input("Sprints", 2, 10, 4)
+    
+    st.divider()
+    # This button triggers the initial creation ONLY
+    if st.button("🚀 GENERATE INITIAL PLAN", type="primary"):
+        st.session_state.generation_trigger = True
+
+# --- 4. Main Dashboard ---
 st.title("Jarvis Phase-Gate Manager")
 
-if st.session_state.master_plan is not None:
-    st.info("💡 **Jarvis Note:** Edits in the 'Hours' column below are now saved permanently to this session.")
+# Effort Inputs
+with st.expander("📥 Effort Baseline"):
+    inputs = {
+        "Analysis": st.number_input("Analysis", value=20.0),
+        "Dev": st.number_input("Development", value=100.0),
+        "Deploy": st.number_input("Deployment", value=10.0)
+    }
+
+# Logic to handle the "Generate" event
+if st.session_state.generation_trigger:
+    st.session_state.roadmap_data = generate_initial_roadmap(dev_names, qa_names, lead_names, inputs, num_sprints)
+    st.session_state.generation_trigger = False # Reset trigger so it doesn't overwrite on next edit
+
+# --- 5. The Persistent Editor ---
+if st.session_state.roadmap_data is not None:
+    st.info("💡 Changes to 'Hours' below are now saved automatically.")
     
-    # The key="plan_editor" is what enables the persistent saving of edits
-    edited_df = st.data_editor(
-        st.session_state.master_plan,
-        key="plan_editor", 
+    # We display and UPDATE the session state directly
+    # Using 'key' ensures the widget stays linked to the data
+    updated_df = st.data_editor(
+        st.session_state.roadmap_data,
         use_container_width=True,
-        column_config={
-            "Hours": st.column_config.NumberColumn("Hours", format="%.1f hrs"),
-            "Sprint": st.column_config.SelectboxColumn("Sprint", options=[f"Sprint {i}" for i in range(10)])
-        }
+        key="main_editor",
+        num_rows="dynamic" # Allows you to add/delete rows too
     )
     
-    # Update the master plan with the edited values
-    st.session_state.master_plan = edited_df
+    # Save back to state
+    st.session_state.roadmap_data = updated_df
 
-    # Live Summary
+    # --- Summary Widget ---
     st.divider()
-    total_h = st.session_state.master_plan['Hours'].sum()
-    st.metric("Total Project Hours (Adjusted)", f"{total_h:.1f} hrs")
-
+    total_h = st.session_state.roadmap_data["Hours"].sum()
+    st.metric("Live Project Total", f"{total_h:.1f} hrs")
 else:
-    st.warning("Please click 'Generate New Plan' in the sidebar to start.")
+    st.write("Please configure the team and click **Generate** in the sidebar to start.")
