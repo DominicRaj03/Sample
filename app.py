@@ -9,8 +9,6 @@ st.set_page_config(page_title="Jarvis Executive Intelligence", layout="wide")
 # --- 1. Memory Initialization ---
 if 'master_plan' not in st.session_state:
     st.session_state.master_plan = None
-if 'quality_data' not in st.session_state:
-    st.session_state.quality_data = pd.DataFrame()
 
 # --- 2. Logic Engine ---
 def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, sprint_days):
@@ -71,8 +69,8 @@ with st.expander("👥 Total Team Size & Capacity Settings", expanded=st.session
     daily_limit = st.slider("Max Daily Hours/Person", 1, 24, 8)
     capacity = sp_days * daily_limit
 
-# --- 4. Sprint Planning: Effort Inputs ---
-with st.expander("📝 Sprint Planning (Baseline Effort)", expanded=True):
+# --- 4. Sprint Planning (Unrestricted) ---
+with st.expander("📝 Sprint Planning (Effort Inputs)", expanded=True):
     pc1, pc2 = st.columns(2)
     with pc1:
         h_analysis = st.number_input("Analysis Phase", value=0.0)
@@ -93,17 +91,16 @@ with st.expander("📝 Sprint Planning (Baseline Effort)", expanded=True):
         "Smoke": h_smoke, "Deploy": h_deploy
     }
 
-    if st.button("🚀 GENERATE DATA", use_container_width=True):
+    if st.button("🚀 GENERATE ROADMAP", use_container_width=True):
         st.session_state.master_plan = run_allocation(dev_list, qa_list, lead_list, plan_inputs, num_sp, start_dt, sp_days)
-        st.session_state.quality_data = pd.DataFrame([{"Sprint": f"Sprint {i}", "Bugs Found": 0, "Test Cases": 0} for i in range(num_sp)])
         st.rerun()
 
-# --- 5. Tabs for Analysis & Refinement ---
-tab1, tab2, tab3 = st.tabs(["🗺️ Roadmap Editor", "📊 Sprint Comparison", "🎯 Quality Metrics"])
+# --- 5. Tabs ---
+tab1, tab2 = st.tabs(["🗺️ Roadmap Editor", "📊 Analytics & Comparison"])
 
 with tab1:
     if st.session_state.master_plan is not None:
-        # VALIDATION WARNINGS
+        # Validation Warnings
         usage = st.session_state.master_plan.groupby(['Sprint', 'Owner'])['Hours'].sum().reset_index()
         over = usage[usage['Hours'] > capacity]
         
@@ -111,27 +108,26 @@ with tab1:
             for _, row in over.iterrows():
                 st.error(f"⚠️ Capacity Breach: {row['Owner']} assigned {row['Hours']}h in {row['Sprint']} (Limit: {capacity}h)")
         else:
-            st.success(f"✅ All resources are within the {capacity}h sprint capacity.")
+            st.success(f"✅ Capacity Check: All resources are within the {capacity}h limit.")
             
-        st.write("### 🛠️ Manual Data Refinement")
+        st.write("### 🛠️ Manual Roadmap Editor")
         st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
 
-with tab2: # SPRINT COMPARISON
+with tab2:
     if st.session_state.master_plan is not None:
-        st.subheader("Resource Workload Comparison")
-        comp_matrix = st.session_state.master_plan.pivot_table(
-            index="Owner", 
-            columns="Sprint", 
-            values="Hours", 
-            aggfunc="sum"
-        ).fillna(0)
+        # Resource Filter
+        all_owners = sorted(st.session_state.master_plan["Owner"].unique().tolist())
+        sel_res = st.multiselect("🔍 Filter Resources", options=all_owners, default=all_owners)
         
-        st.dataframe(comp_matrix.style.background_gradient(cmap="YlOrRd"), use_container_width=True)
+        # Comparison Matrix
+        st.subheader("Sprint Workload Comparison")
+        comp = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
+        st.dataframe(comp.style.background_gradient(cmap="YlOrRd"), use_container_width=True)
         
-        # Day-to-Day Timeline
+        # Gantt Timeline
         st.divider()
         st.subheader("Day-to-Day Timeline")
-        df_viz = st.session_state.master_plan.copy()
+        df_viz = st.session_state.master_plan[st.session_state.master_plan["Owner"].isin(sel_res)].copy()
         df_viz["Start"] = pd.to_datetime(df_viz["Start"])
         df_viz["Finish"] = pd.to_datetime(df_viz["Finish"])
         
@@ -139,8 +135,9 @@ with tab2: # SPRINT COMPARISON
         fig.update_yaxes(autorange="reversed")
         st.plotly_chart(fig, use_container_width=True)
 
-with tab3: #
-    if not st.session_state.quality_data.empty:
-        st.session_state.quality_data = st.data_editor(st.session_state.quality_data, use_container_width=True)
-        fig_q = px.bar(st.session_state.quality_data, x="Sprint", y=["Test Cases", "Bugs Found"], barmode="group")
-        st.plotly_chart(fig_q, use_container_width=True)
+        # Export
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            st.session_state.master_plan.to_excel(writer, sheet_name='Roadmap', index=False)
+            comp.to_excel(writer, sheet_name='Workload_Comparison')
+        st.download_button("📥 Export to Excel", buffer.getvalue(), "Jarvis_Roadmap.xlsx", use_container_width=True)
