@@ -6,13 +6,13 @@ import io
 
 st.set_page_config(page_title="Jarvis Executive Intelligence", layout="wide")
 
-# --- 1. Persistent Memory ---
+# --- 1. Memory Initialization ---
 if 'master_plan' not in st.session_state:
     st.session_state.master_plan = None
 if 'quality_data' not in st.session_state:
     st.session_state.quality_data = pd.DataFrame()
 
-# --- 2. Calculation Engine ---
+# --- 2. Logic Engine ---
 def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, sprint_days):
     plan = []
     curr_dt = pd.to_datetime(start_date)
@@ -48,11 +48,10 @@ def run_allocation(devs, qas, leads, planning_data, num_sprints, start_date, spr
             
     return pd.DataFrame(plan)
 
-# --- 3. UI Structure ---
+# --- 3. UI: Team Setup ---
 st.title("Jarvis Phase-Gate Intelligence")
 
-# Team Setup
-with st.expander("👥 Team Setup & Capacity Settings", expanded=st.session_state.master_plan is None):
+with st.expander("👥 Total Team Size & Capacity Settings", expanded=st.session_state.master_plan is None):
     col_t1, col_t2, col_t3 = st.columns(3)
     with col_t1:
         d_size = st.number_input("Dev Team Size", 1, 10, 3)
@@ -67,73 +66,81 @@ with st.expander("👥 Team Setup & Capacity Settings", expanded=st.session_stat
     st.divider()
     sc1, sc2, sc3 = st.columns(3)
     start_dt = sc1.date_input("Project Start", datetime(2026, 2, 9))
-    num_sp = sc2.number_input("Total Sprints", 2, 12, 4)
-    sp_days = sc3.number_input("Working Days/Sprint", 1, 30, 8)
-    daily_limit = st.slider("Max Daily Hours", 4, 12, 8)
+    num_sp = sc2.number_input("Total Sprints", 2, 24, 4)
+    sp_days = sc3.number_input("Working Days/Sprint", 1, 60, 8)
+    daily_limit = st.slider("Max Daily Hours/Person", 1, 24, 8)
     capacity = sp_days * daily_limit
 
-# Sprint Planning
-with st.expander("📝 Sprint Planning", expanded=True):
+# --- 4. Sprint Planning: Effort Inputs ---
+with st.expander("📝 Sprint Planning (Baseline Effort)", expanded=True):
     pc1, pc2 = st.columns(2)
     with pc1:
-        vals = {
-            "Analysis": st.number_input("Analysis Phase", 25.0),
-            "Dev": st.number_input("Development Phase", 350.0),
-            "Fixes": st.number_input("Bug Fixes", 40.0),
-            "Review": st.number_input("Code Review", 20.0),
-            "QA_Test": st.number_input("QA testing", 80.0)
-        }
+        h_analysis = st.number_input("Analysis Phase", value=0.0)
+        h_dev = st.number_input("Development Phase", value=0.0)
+        h_fixes = st.number_input("Bug Fixes", value=0.0)
+        h_review = st.number_input("Code Review", value=0.0)
+        h_qa = st.number_input("QA testing", value=0.0)
     with pc2:
-        vals.update({
-            "TC_Prep": st.number_input("TC preparation", 20.0),
-            "Retest": st.number_input("Bug retest", 15.0),
-            "Integ": st.number_input("Integration Testing", 30.0),
-            "Smoke": st.number_input("Smoke test", 10.0),
-            "Deploy": st.number_input("Merge and Deploy", 8.0)
-        })
+        h_tc = st.number_input("TC preparation", value=0.0)
+        h_retest = st.number_input("Bug retest", value=0.0)
+        h_integ = st.number_input("Integration Testing", value=0.0)
+        h_smoke = st.number_input("Smoke test", value=0.0)
+        h_deploy = st.number_input("Merge and Deploy", value=0.0)
+    
+    plan_inputs = {
+        "Analysis": h_analysis, "Dev": h_dev, "Fixes": h_fixes, "Review": h_review,
+        "QA_Test": h_qa, "TC_Prep": h_tc, "Retest": h_retest, "Integ": h_integ,
+        "Smoke": h_smoke, "Deploy": h_deploy
+    }
 
     if st.button("🚀 GENERATE DATA", use_container_width=True):
-        st.session_state.master_plan = run_allocation(dev_list, qa_list, lead_list, vals, num_sp, start_dt, sp_days)
-        st.session_state.quality_data = pd.DataFrame([{"Sprint": f"Sprint {i}", "Bugs Found": 0, "Test Cases": 20} for i in range(num_sp)])
+        st.session_state.master_plan = run_allocation(dev_list, qa_list, lead_list, plan_inputs, num_sp, start_dt, sp_days)
+        st.session_state.quality_data = pd.DataFrame([{"Sprint": f"Sprint {i}", "Bugs Found": 0, "Test Cases": 0} for i in range(num_sp)])
         st.rerun()
 
-tab1, tab2, tab3 = st.tabs(["🗺️ Roadmap Editor", "📊 Analytics", "🎯 Quality & Forecast"])
+# --- 5. Tabs for Analysis & Refinement ---
+tab1, tab2, tab3 = st.tabs(["🗺️ Roadmap Editor", "📊 Sprint Comparison", "🎯 Quality Metrics"])
 
 with tab1:
     if st.session_state.master_plan is not None:
-        # Validation Warnings
+        # VALIDATION WARNINGS
         usage = st.session_state.master_plan.groupby(['Sprint', 'Owner'])['Hours'].sum().reset_index()
         over = usage[usage['Hours'] > capacity]
-        for _, row in over.iterrows():
-            st.warning(f"⚠️ Capacity Alert: {row['Owner']} has {row['Hours']}h in {row['Sprint']} (Limit: {capacity}h)")
+        
+        if not over.empty:
+            for _, row in over.iterrows():
+                st.error(f"⚠️ Capacity Breach: {row['Owner']} assigned {row['Hours']}h in {row['Sprint']} (Limit: {capacity}h)")
+        else:
+            st.success(f"✅ All resources are within the {capacity}h sprint capacity.")
+            
+        st.write("### 🛠️ Manual Data Refinement")
         st.session_state.master_plan = st.data_editor(st.session_state.master_plan, use_container_width=True)
 
-with tab2: 
+with tab2: # SPRINT COMPARISON
     if st.session_state.master_plan is not None:
-        # Resource Filter Logic
-        all_owners = sorted(st.session_state.master_plan["Owner"].unique().tolist())
-        selected_res = st.multiselect("🔍 Filter by Resource", options=all_owners, default=all_owners)
+        st.subheader("Resource Workload Comparison")
+        comp_matrix = st.session_state.master_plan.pivot_table(
+            index="Owner", 
+            columns="Sprint", 
+            values="Hours", 
+            aggfunc="sum"
+        ).fillna(0)
         
-        filtered_df = st.session_state.master_plan[st.session_state.master_plan["Owner"].isin(selected_res)].copy()
-        filtered_df["Start"] = pd.to_datetime(filtered_df["Start"])
-        filtered_df["Finish"] = pd.to_datetime(filtered_df["Finish"])
+        st.dataframe(comp_matrix.style.background_gradient(cmap="YlOrRd"), use_container_width=True)
         
-        st.subheader("Day-to-Day Timeline")
-        fig_gantt = px.timeline(
-            filtered_df, x_start="Start", x_end="Finish", y="Task", color="Owner",
-            hover_data=["Hours", "Sprint", "Role"], title="Resource Deployment Schedule"
-        )
-        fig_gantt.update_yaxes(autorange="reversed")
-        st.plotly_chart(fig_gantt, use_container_width=True)
-
+        # Day-to-Day Timeline
         st.divider()
-        st.subheader("Workload Comparison")
-        comp = st.session_state.master_plan.pivot_table(index="Owner", columns="Sprint", values="Hours", aggfunc="sum").fillna(0)
-        st.dataframe(comp.style.highlight_max(axis=1, color="#501010"), use_container_width=True)
+        st.subheader("Day-to-Day Timeline")
+        df_viz = st.session_state.master_plan.copy()
+        df_viz["Start"] = pd.to_datetime(df_viz["Start"])
+        df_viz["Finish"] = pd.to_datetime(df_viz["Finish"])
+        
+        fig = px.timeline(df_viz, x_start="Start", x_end="Finish", y="Task", color="Owner")
+        fig.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig, use_container_width=True)
 
 with tab3: #
     if not st.session_state.quality_data.empty:
-        st.subheader("Quality Trends")
-        fig_q = px.area(st.session_state.quality_data, x="Sprint", y=["Test Cases", "Bugs Found"], title="Quality Stability Over Time")
-        st.plotly_chart(fig_q, use_container_width=True)
         st.session_state.quality_data = st.data_editor(st.session_state.quality_data, use_container_width=True)
+        fig_q = px.bar(st.session_state.quality_data, x="Sprint", y=["Test Cases", "Bugs Found"], barmode="group")
+        st.plotly_chart(fig_q, use_container_width=True)
